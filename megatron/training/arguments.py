@@ -1431,6 +1431,10 @@ def _add_logging_args(parser):
                        '      executed numerous times during each iteration. '
                        'Note that setting the level to 1 or 2 might '
                        'cause increase in iteration time.')
+    group.add_argument('--increase-log-level-interval', type=int, default=1000,
+                       help='The number of steps in each cycle for increasing the log level to 2.')
+    group.add_argument('--increase-log-level-iters', type=int, default=5,
+                       help='The number of steps to increase the log level to 2 in each cycle.')
     group.add_argument('--no-barrier-with-level-1-timing', action='store_false',
                        help='If not set, use barrier with level 1 time '
                        'measurements. Note that this is up to the user '

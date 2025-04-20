@@ -2009,6 +2009,16 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
 
         # Run training step.
         args.curr_iteration = iteration
+        if iteration % args.increase_log_level_interval == 0:
+            print_rank_0(f'Iter {iteration} increase timing-log-level to 2.')
+            args.init_timing_log_level = args.timing_log_level
+            args.timing_log_level = 2
+            timers.set_log_level(2)
+        if iteration % args.increase_log_level_interval == args.increase_log_level_iters:
+            print_rank_0(f'Iter {iteration} reset timing-log-level.')
+            args.timing_log_level = args.init_timing_log_level
+            timers.set_log_level(args.init_timing_log_level)
+
         ft_integration.on_training_step_start()
         loss_dict, skipped_iter, should_checkpoint, should_exit, exit_code, grad_norm, num_zeros_in_grad = \
             train_step(forward_step_func,

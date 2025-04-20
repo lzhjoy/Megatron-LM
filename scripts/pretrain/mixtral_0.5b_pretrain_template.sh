@@ -91,10 +91,13 @@ TOKENIZER_TYPE=${TOKENIZER_TYPE:-'hf_tokenizer_qwen'}
 DATA_PATH_CACHE="/volume/ailab4sci/txie/huyiwen/cache"
 if [[ ${TOKENIZER_TYPE} == "hf_tokenizer_qwen" ]]; then
     DATA_PATH_TOKENIZED="${DATA_PATH}/qwen2.5"
-    TOKENIZER_ARGS="--tokenizer-type HuggingFaceTokenizer --tokenizer_model ../../tokenizer"
+    TOKENIZER_ARGS="--tokenizer-type HuggingFaceTokenizer --tokenizer-model ../../tokenizer"
 elif [[ ${TOKENIZER_TYPE} == "gpt2bpe" ]]; then
     DATA_PATH_TOKENIZED="${DATA_PATH}"
     TOKENIZER_ARGS="--vocab-file /volume/ailab4sci/models/gpt2/vocab.json --merge-file /volume/ailab4sci/models/gpt2/merges.txt"
+elif [[ ${TOKENIZER_TYPE} == "hf_tokenizer_yulan_mini" ]]; then
+    DATA_PATH_TOKENIZED="${DATA_PATH}/yulan_mini"
+    TOKENIZER_ARGS="--tokenizer-type HuggingFaceTokenizer --tokenizer-model yulan-team/YuLan-Mini"
 else
     echo "ERROR: Unknown tokenizer type ${TOKENIZER_TYPE}"
     exit 1
