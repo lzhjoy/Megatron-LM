@@ -1784,6 +1784,13 @@ def checkpoint_and_decide_exit(model, optimizer, opt_param_scheduler, iteration,
                                  checkpointing_context,
                                  non_persistent_ckpt=True, train_data_iterator=train_data_iterator)
         saved_checkpoint = True
+    
+    elif args.save and iteration == 1 and args.save_step_one:
+        save_checkpoint_and_time(iteration, model, optimizer,
+                                 opt_param_scheduler,
+                                 num_floating_point_operations_so_far,
+                                 checkpointing_context, train_data_iterator=train_data_iterator)
+        saved_checkpoint = True
 
     # Exit based on duration.
     if args.exit_duration_in_mins:

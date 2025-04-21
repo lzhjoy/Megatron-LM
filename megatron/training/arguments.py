@@ -1905,6 +1905,8 @@ def _add_checkpointing_args(parser):
 
     group.add_argument('--save', type=str, default=None,
                        help='Output directory to save checkpoints to.')
+    group.add_argument('--save-step-one', type=bool, default=True,
+                       help='Save the checkpoint of step 1.')
     group.add_argument('--save-interval', '--persistent-save-interval', type=int, default=None,
                        help='Number of iterations between persistent checkpoint saves.')
     group.add_argument('--no-save-optim', action='store_true', default=None,

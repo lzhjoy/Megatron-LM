@@ -18,7 +18,6 @@ PP_SIZE=${PP_SIZE:-1}
 EP_SIZE=${EP_SIZE:-4}
 ACTIVATION_CHECKPOINT=${ACTIVATION_CHECKPOINT:-"false"}
 LOG_INTERVAL=${LOG_INTERVAL:-1}
-SAVE_INTERVAL=${SAVE_INTERVAL:-1000}
 
 # Learning Rate Arguments
 LR=${LR:-"2e-3"}
@@ -27,11 +26,13 @@ LR_DECAY_STYLE=${LR_DECAY_STYLE:-"linear"}
 TRAIN_TOKENS=${TRAIN_TOKENS:-1_000_000_000}
 LR_WARMUP_TOKENS=${LR_WARMUP_TOKENS:-10_000_000}
 LR_DECAY_TOKENS=${LR_DECAY_TOKENS:-990_000_000}
+SAVE_TOKENS=${SAVE_TOKENS:-1_000_000_000}
 
 # Sample-based training
 TRAIN_SAMPLES=$(( ${TRAIN_TOKENS//_/}  / ${SEQ_LEN} ))
 LR_DECAY_SAMPLES=$(( ${LR_DECAY_TOKENS//_/}  / ${SEQ_LEN} ))
 LR_WARMUP_SAMPLES=$(( ${LR_WARMUP_TOKENS//_/}  / ${SEQ_LEN} ))
+SAVE_INTERVAL=$(( ${SAVE_TOKENS//_/} / ${SEQ_LEN} / ${GLOBAL_BATCH_SIZE} ))
 
 # MoE Arguments
 MOE_FFN_HIDDEN_SIZE=${MOE_FFN_HIDDEN_SIZE:-768}
@@ -66,7 +67,8 @@ EXTRA_ARGS=${EXTRA_ARGS:-""}
 # ###################################################
 
 current_time=$(date "+%Y.%m.%d-%H.%M.%S")
-NAME="mixtral-0.5b-${MODEL_SIZE}-q${NUM_ATTN_HEADS}-kv${NUM_QUERY_GROUPS}-ep-${NUM_EXPERTS}-sep-${num_shared_experts}-top${MOE_TOPK}-cf-${MOE_EXPERT_CAPACITY_FACTOR}-mlc-${MOE_AUX_LOSS_COEFF}-bf16-ep${EP_SIZE}-mp${MP_SIZE}-pp${PP_SIZE}-lr-${LR}-minlr-${MIN_LR}-bs-${GLOBAL_BATCH_SIZE}-gpus-${GPU_SIZE}-seqlen-${SEQ_LEN}"
+MODEL_SIZE='0.5b'
+NAME="mixtral-${MODEL_SIZE}-q${NUM_ATTN_HEADS}-kv${NUM_QUERY_GROUPS}-ep-${NUM_EXPERTS}-sep-${num_shared_experts}-top${MOE_TOPK}-cf-${MOE_EXPERT_CAPACITY_FACTOR}-mlc-${MOE_AUX_LOSS_COEFF}-bf16-ep${EP_SIZE}-mp${MP_SIZE}-pp${PP_SIZE}-lr-${LR}-minlr-${MIN_LR}-bs-${GLOBAL_BATCH_SIZE}-gpus-${GPU_SIZE}-seqlen-${SEQ_LEN}"
 CHECKPOINT_PATH="${OUTPUT_CHECKPOINT_PATH}/checkpoint/${NAME}"
 TENSORBOARD_DIR="${OUTPUT_CHECKPOINT_PATH}/tensorboard/${NAME}_${current_time}"
 LOG_DIR="${OUTPUT_CHECKPOINT_PATH}/log/${NAME}_${current_time}"
