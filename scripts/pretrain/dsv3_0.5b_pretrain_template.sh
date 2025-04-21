@@ -1,4 +1,6 @@
 #!/bin/bash
+# DeepSeek V3 aux-free load balancing
+# 0421 update rate = 1e-3
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 
 # Dir Arguments
@@ -39,9 +41,10 @@ MOE_FFN_HIDDEN_SIZE=${MOE_FFN_HIDDEN_SIZE:-768}
 MOE_TOPK=${MOE_TOPK:-2}
 NUM_EXPERTS=${NUM_EXPERTS:-16}
 NUM_SHARED_EXPERTS=${NUM_SHARED_EXPERTS:-0}
-LOAD_BALANCING=${LOAD_BALANCING:-"aux_loss"}
+LOAD_BALANCING=${LOAD_BALANCING:-"dsv3"}
+MOE_ROUTER_SCORE_FUNCTION=${MOE_ROUTER_SCORE_FUNCTION:-"sigmoid"}
 MOE_EXPERT_CAPACITY_FACTOR=${MOE_EXPERT_CAPACITY_FACTOR:-0.0}
-MOE_AUX_LOSS_COEFF=${MOE_AUX_LOSS_COEFF:-0.05}
+MOE_ROUTER_BIAS_UPDATE_RATE=${MOE_ROUTER_BIAS_UPDATE_RATE:-1e-3}
 
 # Model Arguments
 INIT_STD=${INIT_STD:-0.006}
@@ -68,7 +71,7 @@ EXTRA_ARGS=${EXTRA_ARGS:-""}
 
 current_time=$(date "+%Y.%m.%d-%H.%M.%S")
 MODEL_SIZE='0.5b'
-NAME="mixtral-${MODEL_SIZE}-q${NUM_ATTN_HEADS}-kv${NUM_QUERY_GROUPS}-ep-${NUM_EXPERTS}-sep-${num_shared_experts}-top${MOE_TOPK}-cf-${MOE_EXPERT_CAPACITY_FACTOR}-mlc-${MOE_AUX_LOSS_COEFF}-bf16-ep${EP_SIZE}-mp${MP_SIZE}-pp${PP_SIZE}-lr-${LR}-minlr-${MIN_LR}-bs-${GLOBAL_BATCH_SIZE}-gpus-${GPU_SIZE}-seqlen-${SEQ_LEN}"
+NAME="dsv3-${MODEL_SIZE}-q${NUM_ATTN_HEADS}-kv${NUM_QUERY_GROUPS}-ep-${NUM_EXPERTS}-sep-${num_shared_experts}-top${MOE_TOPK}-cf-${MOE_EXPERT_CAPACITY_FACTOR}-bias-${MOE_ROUTER_BIAS_UPDATE_RATE}-bf16-ep${EP_SIZE}-mp${MP_SIZE}-pp${PP_SIZE}-lr-${LR}-minlr-${MIN_LR}-bs-${GLOBAL_BATCH_SIZE}-gpus-${GPU_SIZE}-seqlen-${SEQ_LEN}"
 CHECKPOINT_PATH="${OUTPUT_CHECKPOINT_PATH}/checkpoint/${NAME}"
 TENSORBOARD_DIR="${OUTPUT_CHECKPOINT_PATH}/tensorboard/${NAME}_${current_time}"
 LOG_DIR="${OUTPUT_CHECKPOINT_PATH}/log/${NAME}_${current_time}"
@@ -110,6 +113,18 @@ if [[ "1${TIE_EMBEDDING}" == "1false" ]]; then
     EXTRA_ARGS="${EXTRA_ARGS} \
         --untie-embeddings-and-output-weights
     "
+fi
+
+# moe
+if [[ ${LOAD_BALANCING} == "dsv3" ]]; then
+    EXTRA_ARGS="${EXTRA_ARGS} \
+        --moe-router-enable-expert-bias
+    "
+    LOAD_BALANCING=none
+fi
+if [ -n "$MOE_AUX_LOSS_COEFF" ]; then
+    echo "ERROR: DeepSeek V3 does not support MOE_AUX_LOSS_COEFF=$MOE_AUX_LOSS_COEFF"
+    exit 1
 fi
 
 # ###################################################
@@ -155,11 +170,12 @@ MOE_ARGS=(
     --moe-grouped-gemm
     --moe-router-topk ${MOE_TOPK}
     --moe-router-load-balancing-type ${LOAD_BALANCING}
+    --moe-router-score-function sigmoid
     --moe-token-dispatcher-type alltoall
     --overlap-param-gather
     --overlap-grad-reduce
     --moe-expert-capacity-factor ${MOE_EXPERT_CAPACITY_FACTOR}
-    --moe-aux-loss-coeff ${MOE_AUX_LOSS_COEFF}
+    --moe-router-bias-update-rate ${MOE_ROUTER_BIAS_UPDATE_RATE}
 )
 
 TRAINING_ARGS=(
