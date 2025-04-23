@@ -71,7 +71,7 @@ EXTRA_ARGS=${EXTRA_ARGS:-""}
 
 current_time=$(date "+%Y.%m.%d-%H.%M.%S")
 MODEL_SIZE='0.5b'
-NAME="dsv3-${MODEL_SIZE}-q${NUM_ATTN_HEADS}-kv${NUM_QUERY_GROUPS}-ep-${NUM_EXPERTS}-sep-${num_shared_experts}-top${MOE_TOPK}-cf-${MOE_EXPERT_CAPACITY_FACTOR}-bias-${MOE_ROUTER_BIAS_UPDATE_RATE}-bf16-ep${EP_SIZE}-mp${MP_SIZE}-pp${PP_SIZE}-lr-${LR}-minlr-${MIN_LR}-bs-${GLOBAL_BATCH_SIZE}-gpus-${GPU_SIZE}-seqlen-${SEQ_LEN}"
+NAME="dsv3-${MODEL_SIZE}-q${NUM_ATTN_HEADS}-kv${NUM_QUERY_GROUPS}-ep-${NUM_EXPERTS}-sep-${num_shared_experts}-top${MOE_TOPK}-cf-${MOE_EXPERT_CAPACITY_FACTOR}-bias-${MOE_ROUTER_BIAS_UPDATE_RATE}-bf16-ep${EP_SIZE}-mp${MP_SIZE}-pp${PP_SIZE}-lr-${LR}-minlr-${MIN_LR}-bs-${GLOBAL_BATCH_SIZE}-gpus-${WORLD_SIZE}-seqlen-${SEQ_LEN}"
 CHECKPOINT_PATH="${OUTPUT_CHECKPOINT_PATH}/checkpoint/${NAME}"
 TENSORBOARD_DIR="${OUTPUT_CHECKPOINT_PATH}/tensorboard/${NAME}_${current_time}"
 LOG_DIR="${OUTPUT_CHECKPOINT_PATH}/log/${NAME}_${current_time}"
