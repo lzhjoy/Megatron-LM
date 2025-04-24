@@ -134,7 +134,12 @@ class TopKRouter(Router):
                 'expert_bias', torch.zeros(self.config.num_moe_experts, dtype=torch.float32)
             )
         else:
-            self.local_tokens_per_expert = None
+            # store local tokens per expert for vio calc
+            self.register_buffer(
+                'local_tokens_per_expert',
+                torch.zeros(self.config.num_moe_experts, dtype=torch.float32),
+                persistent=False,
+            )
             self.expert_bias = None
 
     def _maintain_float32_expert_bias(self):
@@ -422,7 +427,7 @@ class TopKRouter(Router):
         else:
             raise ValueError(f"Unsupported MoE routing type: {self.routing_type}")
         # Prevent extra local tokens accumulation on evaluation or activation recomputation
-        if self.enable_expert_bias and torch.is_grad_enabled():
+        if torch.is_grad_enabled():
             with torch.no_grad():
                 self.local_tokens_per_expert += routing_map.sum(dim=0)
 

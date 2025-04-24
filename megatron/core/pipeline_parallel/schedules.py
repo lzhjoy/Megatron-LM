@@ -527,9 +527,10 @@ def forward_backward_no_pipelining(
     if config.finalize_model_grads_func is not None and not forward_only:
         # Finalize model grads (perform full grad all-reduce / reduce-scatter for
         # data parallelism and layernorm all-reduce for sequence parallelism).
-        config.finalize_model_grads_func(
+        step_data_store = config.finalize_model_grads_func(
             [model], total_num_tokens if config.calculate_per_token_loss else None
         )
+        forward_data_store[0].update(step_data_store)
 
     if config.timers is not None:
         config.timers('forward-backward').stop()
@@ -1592,9 +1593,10 @@ def forward_backward_pipelining_with_interleaving(
         # Finalize model grads (perform full grad all-reduce / reduce-scatter for
         # data parallelism, layernorm all-reduce for sequence parallelism, and
         # embedding all-reduce for pipeline parallelism).
-        config.finalize_model_grads_func(
+        step_data_store = config.finalize_model_grads_func(
             model, total_num_tokens if config.calculate_per_token_loss else None
         )
+        forward_data_store[0].update(step_data_store)
 
     # Restore config.grad_sync_func and config.param_sync_func.
     if forward_only:
@@ -1999,9 +2001,10 @@ def forward_backward_pipelining_without_interleaving(
         # Finalize model grads (perform full grad all-reduce / reduce-scatter for
         # data parallelism, layernorm all-reduce for sequence parallelism, and
         # embedding all-reduce for pipeline parallelism).
-        config.finalize_model_grads_func(
+        step_data_store = config.finalize_model_grads_func(
             [model], total_num_tokens if config.calculate_per_token_loss else None
         )
+        forward_data_store[0].update(step_data_store)
 
     if config.timers is not None:
         config.timers('forward-backward').stop()

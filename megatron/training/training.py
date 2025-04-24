@@ -1327,6 +1327,9 @@ def train_step(forward_step_func, data_iterator,
             numerator = 0
             denominator = 0
             for x in losses_reduced:
+                # skip keys that only present in the first micro batch size
+                if key not in x:
+                    continue
                 val = x[key]
                 # there is one dict per microbatch. in new reporting, we average
                 # over the total number of tokens across the global batch.
@@ -1367,6 +1370,11 @@ def training_log(loss_dict, total_loss_dict, learning_rate, decoupled_learning_r
     # Skipped iterations.
     total_loss_dict[skipped_iters_key] = total_loss_dict.get(
         skipped_iters_key, 0) + skipped_iter
+    # max_vio
+    if 'max_vio' in loss_dict:
+        max_vio = loss_dict.pop('max_vio')
+    else:
+        max_vio = None
     # Update losses and set nan iterations
     got_nan = False
     for key in loss_dict:
@@ -1428,6 +1436,8 @@ def training_log(loss_dict, total_loss_dict, learning_rate, decoupled_learning_r
         timers.write(timers_to_log, writer, iteration,
                      normalizer=total_iterations)
     if writer and (iteration % args.tensorboard_log_interval == 0):
+        if max_vio is not None:
+            writer.add_scalar('max_vio', max_vio, iteration)
         if wandb_writer:
             wandb_writer.log({'samples vs steps': args.consumed_train_samples},
                              iteration)
