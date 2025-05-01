@@ -14,7 +14,7 @@ export SUFFIX="test_17_yulan_mini"  # 数据集名称，一般格式为 v1.1.1_x
 
 OUTPUT_CHECKPOINT_PATH="/volume/ailab4sci/txie/huyiwen/megatron_lm_workspace" \
 DATA_PATH="/volume/ailab4sci/txie/huyiwen/dataset/${SUFFIX}" \
-BATCH_SIZE=16 GLOBAL_BATCH_SIZE=1024 \
+BATCH_SIZE=8 GLOBAL_BATCH_SIZE=1024 \
 TRAIN_TOKENS=40_000_000_000 LR_WARMUP_TOKENS=1_000_000_000 SAVE_TOKENS=10_000_000_000 \
 LR_DECAY_STYLE='linear' LR_DECAY_TOKENS=39_000_000_000 \
 LR=2e-3 MIN_LR=7e-7 \

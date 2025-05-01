@@ -2,6 +2,7 @@
 # DeepSeek V3 aux-free load balancing
 # 0421 update rate = 1e-3
 export CUDA_DEVICE_MAX_CONNECTIONS=1
+export OMP_NUM_THREADS=4
 
 # Dir Arguments
 DIR=`pwd`
@@ -43,7 +44,7 @@ NUM_EXPERTS=${NUM_EXPERTS:-16}
 NUM_SHARED_EXPERTS=${NUM_SHARED_EXPERTS:-0}
 LOAD_BALANCING=${LOAD_BALANCING:-"dsv3"}
 MOE_ROUTER_SCORE_FUNCTION=${MOE_ROUTER_SCORE_FUNCTION:-"sigmoid"}
-MOE_EXPERT_CAPACITY_FACTOR=${MOE_EXPERT_CAPACITY_FACTOR:-0.0}
+MOE_EXPERT_CAPACITY_FACTOR=${MOE_EXPERT_CAPACITY_FACTOR:-2}
 MOE_ROUTER_BIAS_UPDATE_RATE=${MOE_ROUTER_BIAS_UPDATE_RATE:-1e-3}
 
 # Model Arguments
@@ -71,24 +72,22 @@ EXTRA_ARGS=${EXTRA_ARGS:-""}
 
 current_time=$(date "+%Y.%m.%d-%H.%M.%S")
 MODEL_SIZE='0.5b'
-NAME="dsv3-${MODEL_SIZE}-q${NUM_ATTN_HEADS}-kv${NUM_QUERY_GROUPS}-ep-${NUM_EXPERTS}-sep-${num_shared_experts}-top${MOE_TOPK}-cf-${MOE_EXPERT_CAPACITY_FACTOR}-bias-${MOE_ROUTER_BIAS_UPDATE_RATE}-bf16-ep${EP_SIZE}-mp${MP_SIZE}-pp${PP_SIZE}-lr-${LR}-minlr-${MIN_LR}-bs-${GLOBAL_BATCH_SIZE}-gpus-${WORLD_SIZE}-seqlen-${SEQ_LEN}"
+NAME="${NAME_PREFIX}dsv3-${MODEL_SIZE}-q${NUM_ATTN_HEADS}-kv${NUM_QUERY_GROUPS}-ep-${NUM_EXPERTS}-sep-${NUM_SHARED_EXPERTS}-top${MOE_TOPK}-cf-${MOE_EXPERT_CAPACITY_FACTOR}-bias-${MOE_ROUTER_BIAS_UPDATE_RATE}-bf16-ep${EP_SIZE}-mp${MP_SIZE}-pp${PP_SIZE}-lr-${LR}-minlr-${MIN_LR}-bs-${GLOBAL_BATCH_SIZE}-gpus-${WORLD_SIZE}-seqlen-${SEQ_LEN}"
 CHECKPOINT_PATH="${OUTPUT_CHECKPOINT_PATH}/checkpoint/${NAME}"
-TENSORBOARD_DIR="${OUTPUT_CHECKPOINT_PATH}/tensorboard/${NAME}_${current_time}"
-LOG_DIR="${OUTPUT_CHECKPOINT_PATH}/log/${NAME}_${current_time}"
+LOG_DIR="${OUTPUT_CHECKPOINT_PATH}/log/${current_time}_${NAME}"
 mkdir -p ${CHECKPOINT_PATH}
-mkdir -p ${TENSORBOARD_DIR}
 mkdir -p ${LOG_DIR}
 cp $0 ${LOG_DIR}
 
 # check continual-pretrain or from-scratch
-if [ -d "$CHECKPOINT_PATH" ]; then
+if [ -d "$CHECKPOINT_PATH/latest_checkpointed_iteration.txt" ]; then
     LOAD_CHECKPOINT_PATH="${CHECKPOINT_PATH}"
     CONTINUE_TRAIN=${CONTINUE_TRAIN:-'true'}
-    echo "Find existing checkpoint $CHECKPOINT_PATH"
+    echo -e "\033[32mFind existing checkpoint $CHECKPOINT_PATH\033[0m"
 else
     LOAD_CHECKPOINT_PATH="${PRETRAINED_CKPT_ROOT_PATH}/${PRETRAINED_CKPT_NAME}"
     CONTINUE_TRAIN=${CONTINUE_TRAIN:-'false'}
-    echo "Checkpoint $CHECKPOINT_PATH does not exists. Try to load from $LOAD_CHECKPOINT_PATH"
+    echo -e "\033[32mCheckpoint '$CHECKPOINT_PATH' does not exists. Try to load from '$LOAD_CHECKPOINT_PATH'\033[0m"
 fi
 
 # setup tokenizer
@@ -215,7 +214,7 @@ LOGGING_ARGS=(
     --save-interval ${SAVE_INTERVAL}
     --eval-interval 1000
     --eval-iters 10
-    --tensorboard-dir ${TENSORBOARD_DIR}
+    --tensorboard-dir ${LOG_DIR}
 )
 
 if [ -n "${WANDB_API_KEY}" ]; then
