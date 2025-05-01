@@ -268,7 +268,7 @@ def _update_router_expert_bias(model: List[torch.nn.Module], config: Transformer
     stacked_tokens_per_expert = torch.stack(tokens_per_expert_list, dim=0)
     stacked_expert_bias = torch.stack(expert_bias_list, dim=0)
     stacked_updated_expert_bias, max_vio = get_updated_expert_bias(
-        stacked_tokens_per_expert, stacked_expert_bias, config.moe_router_bias_update_rate
+        stacked_tokens_per_expert, stacked_expert_bias, config.moe_router_bias_update_rate, method=config.moe_router_bias_update_method
     )
 
     for tokens_per_expert, expert_bias, updated_expert_bias in zip(
@@ -327,7 +327,7 @@ def finalize_model_grads(model: List[torch.nn.Module], num_tokens: Optional[torc
 
     if config.moe_router_enable_expert_bias:
         step_data_store.update(_update_router_expert_bias(model, config))
-    elif config.num_experts is not None and config.num_experts > 1:
+    elif config.num_moe_experts is not None and config.num_moe_experts > 1:
         # calculate violation metrics for aux-loss
         step_data_store.update(_calculate_moe_vio(model, config))
 

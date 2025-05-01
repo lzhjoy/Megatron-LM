@@ -19,13 +19,16 @@ from datetime import datetime
 from functools import reduce, wraps
 from importlib.metadata import version
 from types import TracebackType
-from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Type, Union
 
 import torch
 from packaging.version import Version as PkgVersion
 
 from megatron.core import config
 from megatron.core.package_info import __version__ as mcore_version
+
+if TYPE_CHECKING:
+    from megatron.core.transformer.transformer_config import TransformerConfig
 
 try:
     from torch.distributed._tensor import DTensor
@@ -390,7 +393,7 @@ def get_model_xattn(model):
         return False
 
 
-def get_model_config(model):
+def get_model_config(model) -> "TransformerConfig":
     """Returns the config attribute, allowed to return None"""
     return get_attr_wrapped_model(model, 'config', allow_none=False)
 

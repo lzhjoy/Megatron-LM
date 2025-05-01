@@ -2,7 +2,7 @@
 
 import warnings
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Tuple, Union
+from typing import Callable, List, Optional, Tuple, Union, Literal
 
 import torch
 import torch.nn.functional as F
@@ -392,6 +392,10 @@ class TransformerConfig(ModelParallelConfig):
     in a global batch, where the bias is increased for the experts with less assigned tokens
     and decreased for the experts with more assigned tokens.
     The default value 1e-3 is same as that used in DeepSeekV3."""
+    
+    moe_router_bias_update_method: Literal["sign", "rms_norm"] = "sign"
+    """The expert bias update method. https://spaces.ac.cn/archives/10815
+    The default value sign is same as that used in DeepSeekV3."""
 
     moe_grouped_gemm: bool = False
     """When there are multiple experts per rank, compress multiple local (potentially small) gemms

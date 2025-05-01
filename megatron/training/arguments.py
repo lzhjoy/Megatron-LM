@@ -2563,6 +2563,11 @@ def _add_moe_args(parser):
                        'The expert bias is updated based on the number of assigned tokens to each expert in a global batch, '
                        'where the bias is increased for the experts with less assigned tokens and decreased for the experts with more assigned tokens. '
                        'The default value 1e-3 is same as that used in DeepSeekV3.')
+    group.add_argument('--moe-router-bias-update-method', type=str,
+                       choices=['sign', 'rms_norm'],
+                       default='sign',
+                       help='The expert bias update method. https://spaces.ac.cn/archives/10815'
+                       'The default value sign is same as that used in DeepSeekV3.')
     group.add_argument('--moe-aux-loss-coeff', type=float, default=0.0,
                        help='Scaling coefficient for the aux loss: a starting value of 1e-2 is recommended.')
     group.add_argument('--moe-z-loss-coeff', type=float, default=None,

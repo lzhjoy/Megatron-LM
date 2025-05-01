@@ -1,7 +1,7 @@
 # Copyright (c) 2024, NVIDIA CORPORATION. All rights reserved.
 
 import math
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Literal
 
 import torch
 
@@ -729,7 +729,7 @@ def track_moe_metrics(
     clear_aux_losses_tracker()
 
 
-def get_updated_expert_bias(tokens_per_expert, expert_bias, expert_bias_update_rate):
+def get_updated_expert_bias(tokens_per_expert, expert_bias, expert_bias_update_rate, method: Literal["sign", "rms_norm"] = "sign"):
     """Update expert bias for biased expert routing. See https://arxiv.org/abs/2408.15664v1#
 
     Args:
@@ -746,7 +746,12 @@ def get_updated_expert_bias(tokens_per_expert, expert_bias, expert_bias_update_r
         )
         average_tokens = tokens_per_expert.sum(dim=-1, keepdim=True) / tokens_per_expert.shape[-1]
         offset = average_tokens - tokens_per_expert
-        updated_expert_bias = expert_bias + torch.sign(offset) * expert_bias_update_rate
+        if method == "sign":
+            updated_expert_bias = expert_bias + torch.sign(offset) * expert_bias_update_rate
+        elif method == "rms_norm":
+            updated_expert_bias = expert_bias + torch.rms_norm(offset, offset.shape[-1:]) * expert_bias_update_rate
+        else:    
+            raise ValueError(f"Not support expert bias update method {method}.")
         max_vio = (-offset.min(dim=-1)[0] / average_tokens).max()
         return updated_expert_bias, max_vio
 
