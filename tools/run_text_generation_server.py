@@ -4,7 +4,8 @@
 import os
 import sys
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), os.path.pardir)))
+MEGATRON_BASE = os.path.abspath(os.path.join(os.path.dirname(__file__), os.path.pardir))
+sys.path.append(MEGATRON_BASE)
 import os
 import sys
 from argparse import Namespace
@@ -26,24 +27,19 @@ import megatron
 from megatron.core.inference.engines import AbstractEngine, StaticInferenceEngine
 from megatron.core.inference.model_inference_wrappers.inference_wrapper_config import InferenceWrapperConfig
 from megatron.core.models.gpt import GPTModel
-from megatron.training import get_model
 from megatron.core.models.gpt.gpt_layer_specs import get_gpt_layer_local_spec, get_gpt_layer_with_transformer_engine_spec
 from megatron.core.transformer.module import MegatronModule
 from megatron.core.transformer.spec_utils import import_module
+from megatron.inference.text_generation import beam_search_and_post_process
 from megatron.inference.text_generation.mcore_engine_server import (
     ModelInferenceWrapperServer,
     run_mcore_engine,
 )
 from megatron.inference.text_generation_server import MegatronServer
+from megatron.core import mpu
 from megatron.training import print_rank_0
 from megatron.training.arguments import core_transformer_config_from_args
 from megatron.training.yaml_arguments import core_transformer_config_from_yaml
-
-sys.path.append(
-    os.path.abspath(os.path.join(os.path.dirname(__file__), os.path.pardir, os.path.pardir))
-)
-
-from megatron.core import mpu
 from megatron.training import get_args, get_model, get_tokenizer
 from megatron.training.checkpointing import load_checkpoint
 from megatron.training.initialize import initialize_megatron
@@ -233,5 +229,10 @@ if __name__ == "__main__":
         if choice.item() == 0:
             try:
                 run_mcore_engine(inference_engine)
+            except ValueError as ve:
+                pass
+        elif choice.item() == 1:
+            try:
+                beam_search_and_post_process(inference_engine.text_generation_controller.inference_wrapped_model.model)
             except ValueError as ve:
                 pass
