@@ -3,7 +3,7 @@
 """Pretrain utilities."""
 
 import dataclasses
-from datetime import datetime
+from datetime import datetime, timedelta
 import functools
 import gc
 import logging
@@ -104,6 +104,7 @@ from .utils import (
     report_memory,
     unwrap_model,
     update_use_dist_ckpt,
+    get_peak_flops,
 )
 from .global_vars import (
     destroy_global_vars,
@@ -1127,6 +1128,7 @@ def setup_model_and_optimizer(model_provider_func,
 
     model = get_model(model_provider_func, model_type)
     unwrapped_model = unwrap_model(model)
+    print(unwrap_model)
 
     kwargs = {}
     for f in dataclasses.fields(OptimizerConfig):
@@ -1572,7 +1574,8 @@ def training_log(loss_dict, total_loss_dict, learning_rate, decoupled_learning_r
         log_string += ' elapsed time per iteration (ms): {:.1f} |'.format(
             elapsed_time_per_iteration * 1000.0)
         if args.log_throughput:
-            log_string += f' throughput per GPU (TFLOP/s/GPU): {throughput:.1f} |'
+            mfu = throughput / get_peak_flops() * 1e12 * 100
+            log_string += f' throughput per GPU (TFLOP/s/GPU): {throughput:.1f} | MFU {mfu:.2f}% |'
             if args.log_timers_to_tensorboard:
                 if writer:
                     writer.add_scalar('throughput', throughput, iteration)
@@ -1606,6 +1609,11 @@ def training_log(loss_dict, total_loss_dict, learning_rate, decoupled_learning_r
             total_loss_dict[skipped_iters_key])
         log_string += ' number of nan iterations: {:3d} |'.format(
             total_loss_dict[nan_iters_key])
+        remaining_time = timedelta(seconds=elapsed_time_per_iteration * (args.train_iters - iteration))
+        log_string += ' remaining time: {} | finish at {}'.format(
+            str(remaining_time),
+            (datetime.now() + remaining_time).strftime('%Y-%m-%d %H:%M:%S')
+        )
         total_loss_dict[advanced_iters_key] = 0
         total_loss_dict[skipped_iters_key] = 0
         total_loss_dict[nan_iters_key] = 0
