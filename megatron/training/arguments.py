@@ -22,17 +22,12 @@ from megatron.core.models.retro.utils import (
 from megatron.core.rerun_state_machine import RerunStateMachine
 from megatron.core.transformer import MLATransformerConfig, TransformerConfig
 from megatron.core.transformer.enums import AttnBackend
-from megatron.core.transformer.heterogeneous.heterogeneous_config import (
-    HeterogeneousTransformerConfig,
-    MLPConfig,
-)
 from megatron.core.utils import (
     get_torch_version,
     is_torch_min_version,
 )
 from megatron.training.activations import squared_relu
 from megatron.training.utils import get_device_arch_version, update_use_dist_ckpt, print_rank_0
-from megatron.core.msc_utils import MultiStorageClientFeature
 
 
 def add_megatron_arguments(parser: argparse.ArgumentParser):
@@ -102,6 +97,7 @@ def parse_args(extra_args_provider=None, ignore_unknown_args=False):
 
     # Args to disable MSC
     if not args.enable_msc:
+        from megatron.core.msc_utils import MultiStorageClientFeature
         MultiStorageClientFeature.disable()
         assert MultiStorageClientFeature.is_enabled() is False
         print('WARNING: The MSC feature is disabled.')
@@ -1015,6 +1011,7 @@ def core_transformer_config_from_args(args, config_class=None):
     
     if args.heterogeneous_layers_config_path is not None:
         assert not args.multi_latent_attention, "Multi latent attention with heterogeneous layers is not supported."
+        from megatron.core.transformer.heterogeneous.heterogeneous_config import HeterogeneousTransformerConfig
         config_class = HeterogeneousTransformerConfig
 
     # Translate args to core transformer configuration
@@ -1034,13 +1031,29 @@ def core_transformer_config_from_args(args, config_class=None):
     kw_args['num_layers_in_last_pipeline_stage']= args.decoder_last_pipeline_num_layers
     kw_args['fp8_param'] = args.fp8_param_gather
     if args.swiglu:
+        assert not args.sqreglu
+        assert not args.geglu
         kw_args['activation_func'] = F.silu
         kw_args['gated_linear_unit'] = True
         kw_args['bias_activation_fusion'] = args.bias_swiglu_fusion
+    elif args.sqreglu:
+        assert not args.swiglu
+        assert not args.geglu
+        assert not args.squared_relu
+        kw_args['activation_func'] = squared_relu
+        kw_args['gated_linear_unit'] = True
+    elif args.geglu:
+        assert not args.sqreglu
+        assert not args.swiglu
+        assert not args.bias_gelu_fusion
+        kw_args['gated_linear_unit'] = True
+        kw_args['bias_activation_fusion'] = False
     else:
         kw_args['bias_activation_fusion'] = args.bias_gelu_fusion
     if args.squared_relu:
         assert not args.swiglu
+        assert not args.geglu
+        assert not args.sqreglu
         kw_args['activation_func'] = squared_relu
     if args.init_method_xavier_uniform:
         kw_args['init_method'] = torch.nn.init.xavier_uniform_
@@ -1319,6 +1332,10 @@ def _add_network_size_args(parser):
                        help='Use squared relu activation instead of default gelu')
     group.add_argument('--swiglu', action='store_true',
                        help='Use gated linear units and SiLU activation instead of default gelu')
+    group.add_argument('--sqreglu', action='store_true',
+                       help='Use gated linear units and squared relu activation instead of default gelu')
+    group.add_argument('--geglu', action='store_true',
+                       help='Use gated linear units and gelu')
     group.add_argument('--onnx-safe', type=bool, required=False,
                        help='Use workarounds for known problems with '
                        'Torch ONNX exporter')
