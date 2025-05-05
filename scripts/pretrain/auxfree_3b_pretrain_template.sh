@@ -70,12 +70,15 @@ EXTRA_ARGS=${EXTRA_ARGS:-""}
 # ###################################################
 
 current_time=$(date "+%Y.%m.%d-%H.%M.%S")
-MODEL_SIZE='0.5b'
-NAME="${NAME_PREFIX}dsv3-${MODEL_SIZE}-q${NUM_ATTN_HEADS}-kv${NUM_QUERY_GROUPS}-ep-${NUM_EXPERTS}-sep-${NUM_SHARED_EXPERTS}-top${MOE_TOPK}-cf-${MOE_EXPERT_CAPACITY_FACTOR}-bias-${MOE_ROUTER_BIAS_UPDATE_RATE}-bf16-ep${EP_SIZE}-mp${MP_SIZE}-pp${PP_SIZE}-lr-${LR}-minlr-${MIN_LR}-bs-${GLOBAL_BATCH_SIZE}-gpus-${WORLD_SIZE}-seqlen-${SEQ_LEN}"
+JOB_ID=${TASK_UUID:-$current_time}
+MODEL_SIZE='3b'
+NAME="${NAME_PREFIX}auxfree-${MODEL_SIZE}-q${NUM_ATTN_HEADS}-kv${NUM_QUERY_GROUPS}-ep-${NUM_EXPERTS}-sep-${NUM_SHARED_EXPERTS}-top${MOE_TOPK}-cf-${MOE_EXPERT_CAPACITY_FACTOR}-bias-${MOE_ROUTER_BIAS_UPDATE_RATE}-bf16-ep${EP_SIZE}-mp${MP_SIZE}-pp${PP_SIZE}-lr-${LR}-minlr-${MIN_LR}-bs-${GLOBAL_BATCH_SIZE}-gpus-${WORLD_SIZE}-seqlen-${SEQ_LEN}"
 CHECKPOINT_PATH="${OUTPUT_CHECKPOINT_PATH}/checkpoint/${NAME}"
-LOG_DIR="${OUTPUT_CHECKPOINT_PATH}/log/${current_time}_${NAME}"
+LOG_DIR="${OUTPUT_CHECKPOINT_PATH}/log/${JOB_ID}_${NAME}"
 mkdir -p ${CHECKPOINT_PATH}
 mkdir -p ${LOG_DIR}
+ln -s $CHECKPOINT_PATH $LOG_DIR/checkpoint
+echo $JOB_ID >> $CHECKPOINT_PATH/linked_runs.txt
 cp $0 ${LOG_DIR}
 
 # check continual-pretrain or from-scratch
@@ -174,6 +177,7 @@ MOE_ARGS=(
     --overlap-grad-reduce
     --moe-expert-capacity-factor ${MOE_EXPERT_CAPACITY_FACTOR}
     --moe-router-bias-update-rate ${MOE_ROUTER_BIAS_UPDATE_RATE}
+    --moe-layer-freq [0,1,1,1,1,1,1,1,1,1,1]
 )
 
 TRAINING_ARGS=(
@@ -214,6 +218,8 @@ LOGGING_ARGS=(
     --eval-interval 1000
     --eval-iters 10
     --tensorboard-dir ${LOG_DIR}
+    --log-timers-to-tensorboard
+    --log-memory-to-tensorboard
 )
 
 if [ -n "${WANDB_API_KEY}" ]; then
@@ -229,6 +235,10 @@ EXTRA_ARGS="${EXTRA_ARGS} \
         "
 fi
 
+if [ $NODE_RANK == "0" ]; then
+    env >> ${LOG_DIR}/ENV-${HOSTNAME}.log
+    echo ${MODEL_ARGS[@]} ${DATA_ARGS[@]} ${MOE_ARGS[@]} ${TRAINING_ARGS[@]} ${MODEL_PARALLEL_ARGS[@]} ${LOGGING_ARGS[@]} ${TOKENIZER_ARGS} ${EXTRA_ARGS} >> ${LOG_DIR}/ENV-${HOSTNAME}.log
+fi
 set -x
 
 torchrun ${DISTRIBUTED_ARGS[@]} ../../pretrain_gpt.py \
