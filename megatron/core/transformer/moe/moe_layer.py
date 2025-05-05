@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Optional, Union
 
 import torch
+import torch.nn.functional as F
 
 from megatron.core import tensor_parallel
 from megatron.core.process_groups_config import ModelCommProcessGroups
@@ -161,6 +162,9 @@ class MoELayer(BaseMoELayer):
             )
             if self.shared_expert_overlap:
                 self.token_dispatcher.set_shared_experts(self.shared_experts)
+        
+        # Whether enable token shift (i.e. short conv)
+        self.moe_token_shift = config.moe_token_shift
 
     def forward(self, hidden_states: torch.Tensor):
         if self.training and self.tp_group.size() > 1 and not self.config.sequence_parallel:
@@ -168,6 +172,14 @@ class MoELayer(BaseMoELayer):
                 "During training, performance may degrade if MoE and tensor parallelism"
                 "are enabled without also enabling sequence parallelism."
             )
+
+        if self.moe_token_shift:
+            # [S/TP, B, H]
+            H = hidden_states.shape[-1]
+            hidden_states = torch.cat([
+                F.pad(hidden_states, (0, 0, 0, 0, 1, 0), "constant", 0)[:-1, :, :H//2],
+                hidden_states[:, :, H//2:],
+            ], dim = -1)
 
         # process MoE
         def custom_forward(hidden_states):

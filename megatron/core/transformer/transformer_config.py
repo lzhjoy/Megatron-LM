@@ -141,6 +141,12 @@ class TransformerConfig(ModelParallelConfig):
 
     multi_latent_attention: bool = False
     """Whether to use multi-latent attention."""
+    
+    ffn_token_shift: bool = False
+    """Whether to use token time-shift before FFN."""
+    
+    moe_token_shift: bool = False
+    """Whether to use token time-shift before MoE."""
 
     ####################
     # initialization
