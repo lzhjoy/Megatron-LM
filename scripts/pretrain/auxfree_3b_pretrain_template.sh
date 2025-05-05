@@ -237,7 +237,7 @@ fi
 
 if [ $NODE_RANK == "0" ]; then
     env >> ${LOG_DIR}/ENV-${HOSTNAME}.log
-    echo ${MODEL_ARGS[@]} ${DATA_ARGS[@]} ${MOE_ARGS[@]} ${TRAINING_ARGS[@]} ${MODEL_PARALLEL_ARGS[@]} ${LOGGING_ARGS[@]} ${TOKENIZER_ARGS} ${EXTRA_ARGS} >> ${LOG_DIR}/ENV-${HOSTNAME}.log
+    echo $(which torchrun) ${DISTRIBUTED_ARGS[@]} ../../pretrain_gpt.py ${MODEL_ARGS[@]} ${DATA_ARGS[@]} ${MOE_ARGS[@]} ${TRAINING_ARGS[@]} ${MODEL_PARALLEL_ARGS[@]} ${LOGGING_ARGS[@]} ${TOKENIZER_ARGS} ${EXTRA_ARGS} >> ${LOG_DIR}/ENV-${HOSTNAME}.log
 fi
 set -x
 
