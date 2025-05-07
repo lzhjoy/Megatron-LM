@@ -105,20 +105,37 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel, megat
         else:
             if args.num_experts:
                 # Define the decoder block spec
-                transformer_layer_spec = get_gpt_decoder_block_spec(config, use_transformer_engine=use_te, normalization=args.normalization)
+                transformer_layer_spec = get_gpt_decoder_block_spec(
+                    config=config,
+                    use_transformer_engine=use_te,
+                    normalization=args.normalization,
+                    qk_l2_norm=args.qk_l2_norm,
+                )
             elif args.heterogeneous_layers_config_path is not None:
-                transformer_layer_spec = get_gpt_heterogeneous_layer_spec(config, use_te)
+                transformer_layer_spec = get_gpt_heterogeneous_layer_spec(config=config, use_te=use_te)
             else:
                 # Define the decoder layer spec
                 if use_te:
                     transformer_layer_spec = get_gpt_layer_with_transformer_engine_spec(
-                        args.num_experts, args.moe_grouped_gemm,
-                        args.qk_layernorm, args.multi_latent_attention, args.moe_use_legacy_grouped_gemm)
+                        num_experts=args.num_experts,
+                        moe_grouped_gemm=args.moe_grouped_gemm,
+                        qk_layernorm=args.qk_layernorm,
+                        multi_latent_attention=args.multi_latent_attention,
+                        moe_use_legacy_grouped_gemm=args.moe_use_legacy_grouped_gemm,
+                        qk_l2_norm=args.qk_l2_norm,
+                        attn_output_gate=args.attn_output_gate,
+                    )
                 else:
                     transformer_layer_spec = get_gpt_layer_local_spec(
-                        args.num_experts, args.moe_grouped_gemm,
-                        args.qk_layernorm, args.multi_latent_attention, args.moe_use_legacy_grouped_gemm,
-                        normalization=args.normalization)
+                        num_experts=args.num_experts,
+                        moe_grouped_gemm=args.moe_grouped_gemm,
+                        qk_layernorm=args.qk_layernorm,
+                        multi_latent_attention=args.multi_latent_attention,
+                        moe_use_legacy_grouped_gemm=args.moe_use_legacy_grouped_gemm,
+                        qk_l2_norm=args.qk_l2_norm,
+                        normalization=args.normalization,
+                        attn_output_gate=args.attn_output_gate,
+                    )
         mtp_block_spec = None
         if args.mtp_num_layers is not None:
             mtp_block_spec = get_gpt_mtp_block_spec(config, transformer_layer_spec, use_transformer_engine=use_te)

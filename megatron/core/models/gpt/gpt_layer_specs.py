@@ -1,13 +1,14 @@
 # Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
 
 import warnings
-from typing import Optional, Union
+from typing import Optional, Union, Literal
 
 from megatron.core.fusions.fused_bias_dropout import get_bias_dropout_add
 from megatron.core.models.gpt.moe_module_specs import get_moe_module_spec
 from megatron.core.tensor_parallel.layers import ColumnParallelLinear, RowParallelLinear
 from megatron.core.transformer.attention import SelfAttention, SelfAttentionSubmodules
 from megatron.core.transformer.dot_product_attention import DotProductAttention
+from megatron.core.transformer.gated_attention import GatedSelfAttention, GatedSelfAttentionSubmodules
 from megatron.core.transformer.enums import AttnMaskType
 from megatron.core.transformer.identity_op import IdentityOp
 from megatron.core.transformer.mlp import MLP, MLPSubmodules
@@ -74,6 +75,7 @@ def get_gpt_layer_with_transformer_engine_spec(
     fp8: Optional[str] = None,  # pylint: disable=unused-arguments
     moe_use_legacy_grouped_gemm: Optional[bool] = False,
     qk_l2_norm: Optional[bool] = False,
+    attn_output_gate: Optional[Literal['lora', 'full']] = None,
 ) -> ModuleSpec:
     """Use this spec to use lower-level Transformer Engine modules (required for fp8 training).
 
@@ -139,6 +141,17 @@ def get_gpt_layer_with_transformer_engine_spec(
             ),
         )
     else:
+        if attn_output_gate is not None:
+            self_attn_module = GatedSelfAttention
+            self_attn_submodules = GatedSelfAttentionSubmodules
+            self_attn_kwargs = {
+                "linear_gate_down_proj": ColumnParallelLinear if attn_output_gate == 'lora' else None,
+                "linear_gate_up_proj": ColumnParallelLinear if attn_output_gate == 'lora' else None,
+            }
+        else:
+            self_attn_module = SelfAttention
+            self_attn_submodules = SelfAttentionSubmodules
+            self_attn_kwargs = {}
 
         # TENorm significantly harms convergence when used
         # for QKLayerNorm if TE Version < 1.9;
@@ -148,9 +161,9 @@ def get_gpt_layer_with_transformer_engine_spec(
             module=TransformerLayer,
             submodules=TransformerLayerSubmodules(
                 self_attention=ModuleSpec(
-                    module=SelfAttention,
+                    module=self_attn_module,
                     params={"attn_mask_type": AttnMaskType.causal},
-                    submodules=SelfAttentionSubmodules(
+                    submodules=self_attn_submodules(
                         linear_qkv=TELayerNormColumnParallelLinear,
                         core_attention=TEDotProductAttention,
                         linear_proj=TERowParallelLinear,
@@ -160,6 +173,7 @@ def get_gpt_layer_with_transformer_engine_spec(
                         k_layernorm=(
                             L2Norm if qk_l2_norm else (qk_norm if qk_layernorm else IdentityOp)
                         ),
+                        **self_attn_kwargs,
                     ),
                 ),
                 self_attn_bda=get_bias_dropout_add,
@@ -179,6 +193,7 @@ def get_gpt_layer_local_spec(
     moe_use_legacy_grouped_gemm: Optional[bool] = False,
     normalization: Optional[str] = None,
     qk_l2_norm: Optional[bool] = False,
+    attn_output_gate: Optional[Literal['lora', 'full']] = None,
 ) -> ModuleSpec:
     """Use this spec for an implementation using only modules in Megatron-Core.
 
@@ -242,14 +257,26 @@ def get_gpt_layer_local_spec(
             ),
         )
     else:
+        if attn_output_gate is not None:
+            self_attn_module = GatedSelfAttention
+            self_attn_submodules = GatedSelfAttentionSubmodules
+            self_attn_kwargs = {
+                "linear_gate_down_proj": ColumnParallelLinear if attn_output_gate == 'lora' else None,
+                "linear_gate_up_proj": ColumnParallelLinear if attn_output_gate == 'lora' else None,
+            }
+        else:
+            self_attn_module = SelfAttention
+            self_attn_submodules = SelfAttentionSubmodules
+            self_attn_kwargs = {}
+        
         return ModuleSpec(
             module=TransformerLayer,
             submodules=TransformerLayerSubmodules(
                 input_layernorm=LNImpl,
                 self_attention=ModuleSpec(
-                    module=SelfAttention,
+                    module=self_attn_module,
                     params={"attn_mask_type": AttnMaskType.causal},
-                    submodules=SelfAttentionSubmodules(
+                    submodules=self_attn_submodules(
                         linear_qkv=ColumnParallelLinear,
                         core_attention=DotProductAttention,
                         linear_proj=RowParallelLinear,
@@ -259,6 +286,7 @@ def get_gpt_layer_local_spec(
                         k_layernorm=(
                             L2Norm if qk_l2_norm else (LNImpl if qk_layernorm else IdentityOp)
                         ),
+                        **self_attn_kwargs,
                     ),
                 ),
                 self_attn_bda=get_bias_dropout_add,
@@ -348,6 +376,7 @@ def get_gpt_decoder_block_spec(
             multi_latent_attention=config.multi_latent_attention,
             moe_use_legacy_grouped_gemm=config.moe_use_legacy_grouped_gemm,
             qk_l2_norm=qk_l2_norm,
+            attn_output_gate=config.attn_output_gate,
         )
         if use_transformer_engine
         else get_gpt_layer_local_spec(
@@ -358,6 +387,7 @@ def get_gpt_decoder_block_spec(
             moe_use_legacy_grouped_gemm=config.moe_use_legacy_grouped_gemm,
             normalization=normalization,
             qk_l2_norm=qk_l2_norm,
+            attn_output_gate=config.attn_output_gate,
         )
     )
     moe_layer_spec = (
@@ -368,6 +398,7 @@ def get_gpt_decoder_block_spec(
             multi_latent_attention=config.multi_latent_attention,
             moe_use_legacy_grouped_gemm=config.moe_use_legacy_grouped_gemm,
             qk_l2_norm=qk_l2_norm,
+            attn_output_gate=config.attn_output_gate,
         )
         if use_transformer_engine
         else get_gpt_layer_local_spec(
@@ -378,6 +409,7 @@ def get_gpt_decoder_block_spec(
             moe_use_legacy_grouped_gemm=config.moe_use_legacy_grouped_gemm,
             normalization=normalization,
             qk_l2_norm=qk_l2_norm,
+            attn_output_gate=config.attn_output_gate,
         )
     )
 

@@ -130,6 +130,9 @@ class Attention(MegatronModule, ABC):
         self.key_hidden_size = self.hidden_size_per_attention_head
         self.val_hidden_size = self.hidden_size_per_attention_head
 
+        # Attention output gate
+        self.use_attn_output_gate = config.attn_output_gate is not None
+
         self.core_attention = build_module(
             submodules.core_attention,
             config=self.config,
@@ -360,6 +363,12 @@ class Attention(MegatronModule, ABC):
         is "self-attn" or "cross-attn".
         """
 
+    def apply_attn_output_gate(self, core_attn_out, gate):
+        """
+        Apply gate to core attention output.
+        """
+        raise NotImplementedError("Only GatedSelfAttention supports apply_attn_output_gate.")
+
     def flash_decode(
         self,
         sequence_len_offset: Tensor,
@@ -521,7 +530,10 @@ class Attention(MegatronModule, ABC):
         # =====================
         # Get the query, key and value tensors based on the type of attention -
         # self or cross attn.
-        query, key, value = self.get_query_key_value_tensors(hidden_states, key_value_states)
+        if self.attention_type == "self" and self.use_attn_output_gate:
+            query, key, value, gate = self.get_query_key_value_tensors(hidden_states, key_value_states)
+        else:
+            query, key, value = self.get_query_key_value_tensors(hidden_states, key_value_states)
 
         # ===================================================
         # Adjust key, value, and rotary_pos_emb for inference
@@ -676,6 +688,8 @@ class Attention(MegatronModule, ABC):
         # =================
         # Output. [sq, b, h]
         # =================
+        if self.attention_type == "self" and self.use_attn_output_gate:
+            core_attn_out = self.apply_attn_output_gate(core_attn_out, gate)
 
         output, bias = self.linear_proj(core_attn_out)
 

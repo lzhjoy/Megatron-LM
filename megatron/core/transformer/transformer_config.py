@@ -148,6 +148,9 @@ class TransformerConfig(ModelParallelConfig):
     moe_token_shift: bool = False
     """Whether to use token time-shift before MoE."""
 
+    attn_output_gate: Optional[Literal['full', 'lora']] = None
+    """Whether to use gated attention output"""
+
     ####################
     # initialization
     ####################

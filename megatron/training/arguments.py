@@ -729,6 +729,9 @@ def validate_args(args, defaults={}):
     else:
         assert args.start_weight_decay is not None
         assert args.end_weight_decay is not None
+ 
+    if args.attn_output_gate is not None:
+        assert not args.multi_latent_attention
 
     # Persistent fused layer norm.
     if not is_torch_min_version("1.11.0a0"):
@@ -1358,6 +1361,8 @@ def _add_network_size_args(parser):
                        'which serves as an additional training objective.')
     group.add_argument('--ffn-token-shift', action='store_true',
                        help='Whether to use token time-shift before FFN. https://zhuanlan.zhihu.com/p/399480671')
+    group.add_argument('--attn-output-gate', type=str, default=None, choices=['full', 'lora'],
+                       help='Whether to use gated attention output.')
     return parser
 
 
@@ -2503,6 +2508,8 @@ def _add_vision_args(parser):
     # regularization arguments
     group.add_argument('--qk-layernorm', action='store_true',
                        help='Whether to layer normalize the q and k attention embeddings.')
+    group.add_argument('--qk-l2-norm', action='store_true',
+                       help='Whether to use L2 normalization instead of layernorm for q and k.')
 
     return parser
 
