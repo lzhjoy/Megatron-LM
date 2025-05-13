@@ -734,6 +734,13 @@ def validate_args(args, defaults={}):
     if args.attn_output_gate is not None:
         assert not args.multi_latent_attention
 
+    # Make sure L2Norm and LayerNorm is not enabled at the same time
+    assert not (args.qk_l2_norm and args.qk_layernorm), "Only one can be enabled: qk-l2-norm and qk-layernorm"
+
+    # Embedding deviation loss
+    if args.emb_deviation_type in ["loss", "square_loss"]:
+        assert args.emb_deviation_loss_coeff is not None
+
     # Persistent fused layer norm.
     if not is_torch_min_version("1.11.0a0"):
         args.no_persist_layer_norm = True
@@ -1364,6 +1371,10 @@ def _add_network_size_args(parser):
                        help='Whether to use token time-shift before FFN. https://zhuanlan.zhihu.com/p/399480671')
     group.add_argument('--attn-output-gate', type=str, default=None, choices=['full', 'lora'],
                        help='Whether to use gated attention output.')
+    group.add_argument('--emb-deviation-loss-coeff', type=float, default=0,
+                       help='Scaling coefficient for the embedding devication loss. Default 0 means disabled.')
+    group.add_argument('--emb-deviation-type', type=str, default=None, choices=['loss', 'square_loss'],
+                       help='The embedding deviation mitigation strategy.')
     return parser
 
 

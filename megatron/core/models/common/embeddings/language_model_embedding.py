@@ -6,8 +6,56 @@ import torch
 from torch import Tensor
 
 from megatron.core import tensor_parallel
+from megatron.core import parallel_state
 from megatron.core.transformer.module import MegatronModule
 from megatron.core.transformer.transformer_config import TransformerConfig
+from megatron.core.transformer.utils import save_to_hidden_states_tracker
+
+
+class EmbDeviationLossAutoScaler(torch.autograd.Function):
+    """An AutoScaler that triggers the backward pass and scales the grad for emb deviation loss."""
+
+    main_loss_backward_scale: torch.Tensor = torch.tensor(1.0)
+
+    @staticmethod
+    def forward(ctx, output: torch.Tensor, emb_deviation_loss: torch.Tensor):
+        """Preserve the emb deviation by storing it in the context to avoid garbage collection.
+
+        Args:
+            output (torch.Tensor): The output tensor.
+            emb_deviation_loss (torch.Tensor): The emb deviation loss tensor.
+
+        Returns:
+            torch.Tensor: The output tensor.
+        """
+        ctx.save_for_backward(emb_deviation_loss)
+        return output
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        """Compute and scale the gradient for emb deviation loss.
+
+        Args:
+            grad_output (torch.Tensor): The gradient of the output.
+
+        Returns:
+            Tuple[torch.Tensor, torch.Tensor]: The gradient of the output, scaled emb deviation
+                                               loss gradient.
+        """
+        (emb_deviation_loss,) = ctx.saved_tensors
+        emb_deviation_loss_backward_scale = EmbDeviationLossAutoScaler.main_loss_backward_scale
+        scaled_emb_deviation_loss_grad = torch.ones_like(emb_deviation_loss) * emb_deviation_loss_backward_scale
+        return grad_output, scaled_emb_deviation_loss_grad
+
+    @staticmethod
+    def set_loss_scale(scale: torch.Tensor):
+        """set the scale of the emb deviation loss.
+
+        Args:
+            scale (torch.Tensor): The scale value to set. Please ensure that the scale passed in
+                                  matches the scale of the main_loss.
+        """
+        EmbDeviationLossAutoScaler.main_loss_backward_scale = scale
 
 
 class LanguageModelEmbedding(MegatronModule):
@@ -41,7 +89,10 @@ class LanguageModelEmbedding(MegatronModule):
         self.max_sequence_length: int = max_sequence_length
         self.add_position_embedding: bool = position_embedding_type == 'learned_absolute'
         self.num_tokentypes = num_tokentypes
-        self.scatter_to_sequence_parallel = scatter_to_sequence_parallel
+        self.scatter_to_sequence_parallel = scatter_to_sequence_parallel  # True value passed from `GPTModel`
+        self.sp_group = parallel_state.get_context_parallel_group()
+
+        # Modern GPT (with rope) always combine the reduce-from-TP and scatter-to-SP two operations
         self.reduce_scatter_embeddings = (
             (not self.add_position_embedding)
             and self.num_tokentypes <= 0
@@ -139,5 +190,22 @@ class LanguageModelEmbedding(MegatronModule):
                 embeddings = self.embedding_dropout(embeddings)
         else:
             embeddings = self.embedding_dropout(embeddings)
+
+        # Embedding deviation loss.
+        if self.config.emb_deviation_type is not None:
+            if self.config.emb_deviation_type == "square_loss":
+                emb_deviation_loss = (embeddings.mean() ** 2) * self.config.emb_deviation_loss_coeff
+            elif self.config.emb_deviation_type == "loss":
+                emb_deviation_loss = torch.abs(embeddings.mean()) * self.config.emb_deviation_loss_coeff
+            else:
+                raise ValueError(f"Unkonw type '{self.config.emb_deviation_type}'")
+            if self.config.calculate_per_token_loss:
+                embeddings = EmbDeviationLossAutoScaler.apply(embeddings, emb_deviation_loss * embeddings.shape[0])
+            else:
+                embeddings = EmbDeviationLossAutoScaler.apply(embeddings, emb_deviation_loss)
+
+        # Log hidden states.
+        if "embeddings" in self.config.log_layer_hidden_states:
+            save_to_hidden_states_tracker("embeddings", embeddings, 0, self.config.num_layers, avg_group=self.sp_group)
 
         return embeddings
