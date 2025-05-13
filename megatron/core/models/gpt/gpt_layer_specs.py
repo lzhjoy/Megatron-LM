@@ -68,6 +68,7 @@ except ImportError:
 
 
 def get_gpt_layer_with_transformer_engine_spec(
+    *,
     num_experts: Optional[int] = None,
     moe_grouped_gemm: Optional[bool] = False,
     qk_layernorm: Optional[bool] = False,
@@ -145,8 +146,8 @@ def get_gpt_layer_with_transformer_engine_spec(
             self_attn_module = GatedSelfAttention
             self_attn_submodules = GatedSelfAttentionSubmodules
             self_attn_kwargs = {
-                "linear_gate_down_proj": ColumnParallelLinear if attn_output_gate == 'lora' else None,
-                "linear_gate_up_proj": ColumnParallelLinear if attn_output_gate == 'lora' else None,
+                "linear_gate_down_proj": TEColumnParallelLinear if attn_output_gate == 'lora' else None,
+                "linear_gate_up_proj": TERowParallelLinear if attn_output_gate == 'lora' else None,
             }
         else:
             self_attn_module = SelfAttention
@@ -262,7 +263,7 @@ def get_gpt_layer_local_spec(
             self_attn_submodules = GatedSelfAttentionSubmodules
             self_attn_kwargs = {
                 "linear_gate_down_proj": ColumnParallelLinear if attn_output_gate == 'lora' else None,
-                "linear_gate_up_proj": ColumnParallelLinear if attn_output_gate == 'lora' else None,
+                "linear_gate_up_proj": RowParallelLinear if attn_output_gate == 'lora' else None,
             }
         else:
             self_attn_module = SelfAttention

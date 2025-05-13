@@ -89,8 +89,8 @@ class GatedSelfAttention(Attention):
                 self.query_projection_size,
                 config=self.config,
                 init_method=self.config.init_method,
-                gather_output=False,
                 bias=False,
+                input_is_parallel=True,
                 skip_bias_add=False,
                 is_expert=False,
             )
@@ -138,7 +138,7 @@ class GatedSelfAttention(Attention):
         context_layer = context_layer * output_gate
         return context_layer
     
-    @torch.compile(dynamic=False)
+    @torch.compile(dynamic=False, disable=True)
     def get_gate_tensor_lora(self, hidden_states):
         compressed, _ = self.linear_gate_down_proj(hidden_states)
         gate, _ = self.linear_gate_up_proj(compressed)
@@ -256,7 +256,7 @@ class GatedSelfAttention(Attention):
 
         # get gate
         if self.lora_gate:
-            gate = self.get_gate_tensor_lora(original_hidden_states)
+            gate = self.get_gate_tensor_lora(hidden_states)
         else:
             query, gate = torch.chunk(query, 2, dim=-1)
 
