@@ -696,6 +696,7 @@ def track_moe_metrics(
         raise ValueError(f"Invalid moe_layer_freq: {moe_layer_freq}")
 
     if writer is not None:
+        # multiple loss_scale (= 1 / num_micro_batches)
         aux_losses = {k: v['values'].float() * loss_scale for k, v in tracker.items()}
         for name, loss_list in aux_losses.items():
             if total_loss_dict is not None:

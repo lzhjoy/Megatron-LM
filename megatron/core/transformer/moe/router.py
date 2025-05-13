@@ -309,6 +309,8 @@ class TopKRouter(Router):
         aux_loss = load_balancing_loss_func(
             moe_aux_loss_coeff=moe_aux_loss_coeff, sequence_partition_group=sequence_partition_group
         )
+        # Router does not use TP or PP, thus only sum across on SP. All DP ranks are recorded,
+        # but only the last DP rank have a tensorboard writer and will be logged.
         save_to_aux_losses_tracker(
             "load_balancing_loss",
             aux_loss / moe_aux_loss_coeff,

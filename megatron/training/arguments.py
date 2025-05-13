@@ -730,6 +730,7 @@ def validate_args(args, defaults={}):
         assert args.start_weight_decay is not None
         assert args.end_weight_decay is not None
  
+    # Attention output gate does not support multi latent attention for now
     if args.attn_output_gate is not None:
         assert not args.multi_latent_attention
 
