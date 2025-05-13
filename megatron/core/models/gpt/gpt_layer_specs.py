@@ -77,6 +77,7 @@ def get_gpt_layer_with_transformer_engine_spec(
     moe_use_legacy_grouped_gemm: Optional[bool] = False,
     qk_l2_norm: Optional[bool] = False,
     attn_output_gate: Optional[Literal['lora', 'full']] = None,
+    log_layer_hidden_states: Optional[list] = None,
 ) -> ModuleSpec:
     """Use this spec to use lower-level Transformer Engine modules (required for fp8 training).
 
@@ -158,14 +159,24 @@ def get_gpt_layer_with_transformer_engine_spec(
         # for QKLayerNorm if TE Version < 1.9;
         # we instead use the Apex implementation.
         qk_norm = TENorm if is_te_min_version("1.9.0") else FusedLayerNorm
+
+        # If we want to log the output hidden states of input_layernorm,
+        # we have to split TELayerNormColumnParallelLinear op.
+        if "input_layernorm" in log_layer_hidden_states:
+            input_layernorm = TENorm
+            linear_qkv = TEColumnParallelLinear
+        else:
+            input_layernorm = IdentityOp
+            linear_qkv = TELayerNormColumnParallelLinear
         return ModuleSpec(
             module=TransformerLayer,
             submodules=TransformerLayerSubmodules(
+                input_layernorm=input_layernorm,
                 self_attention=ModuleSpec(
                     module=self_attn_module,
                     params={"attn_mask_type": AttnMaskType.causal},
                     submodules=self_attn_submodules(
-                        linear_qkv=TELayerNormColumnParallelLinear,
+                        linear_qkv=linear_qkv,
                         core_attention=TEDotProductAttention,
                         linear_proj=TERowParallelLinear,
                         q_layernorm=(
@@ -378,6 +389,7 @@ def get_gpt_decoder_block_spec(
             moe_use_legacy_grouped_gemm=config.moe_use_legacy_grouped_gemm,
             qk_l2_norm=qk_l2_norm,
             attn_output_gate=config.attn_output_gate,
+            log_layer_hidden_states=config.log_layer_hidden_states,
         )
         if use_transformer_engine
         else get_gpt_layer_local_spec(
@@ -400,6 +412,7 @@ def get_gpt_decoder_block_spec(
             moe_use_legacy_grouped_gemm=config.moe_use_legacy_grouped_gemm,
             qk_l2_norm=qk_l2_norm,
             attn_output_gate=config.attn_output_gate,
+            log_layer_hidden_states=config.log_layer_hidden_states,
         )
         if use_transformer_engine
         else get_gpt_layer_local_spec(

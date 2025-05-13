@@ -71,6 +71,7 @@ from megatron.legacy.data.data_samplers import build_pretraining_data_loader
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.transformer.moe import upcycling_utils
 from megatron.core.transformer.moe.moe_utils import track_moe_metrics
+from megatron.core.transformer.utils import track_gpt_metrics
 from megatron.core.transformer.multi_token_prediction import MTPLossLoggingHelper
 from megatron.core.parallel_state import (
     destroy_global_memory_buffer,
@@ -1128,7 +1129,7 @@ def setup_model_and_optimizer(model_provider_func,
 
     model = get_model(model_provider_func, model_type)
     unwrapped_model = unwrap_model(model)
-    print(unwrap_model)
+    print_rank_0(unwrapped_model)
 
     kwargs = {}
     for f in dataclasses.fields(OptimizerConfig):
@@ -1517,6 +1518,16 @@ def training_log(loss_dict, total_loss_dict, learning_rate, decoupled_learning_r
                 mem_stats["allocation.all.current"],
                 iteration,
             )
+    if len(args.log_layer_hidden_states) > 0:
+        # average across microbatches internally
+        track_gpt_metrics(
+            iteration=iteration,
+            writer=writer,
+            wandb_writer=wandb_writer,
+            per_layer_logging=True,
+            force_initialize=True,
+            num_layers=args.num_layers,
+        )
     if args.num_experts is not None:
         moe_loss_scale = 1 / get_num_microbatches()
         track_names = []

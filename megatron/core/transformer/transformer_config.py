@@ -26,6 +26,9 @@ class TransformerConfig(ModelParallelConfig):
     # model architecture
     ####################
 
+    log_layer_hidden_states: Optional[List[str]] = None
+    """Enable mean and std logging of hidden states in each transformer layer."""
+
     num_layers: int = 0
     """Number of transformer layers in a transformer block."""
 

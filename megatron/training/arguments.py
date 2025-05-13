@@ -1506,6 +1506,10 @@ def _add_logging_args(parser):
                        help='Path to save the wandb results locally.')
     group.add_argument('--logging-level', type=int, default=None,
                        help='Set default logging level')
+    group.add_argument('--log-layer-hidden-states', nargs='+', type=str, default=[],
+                       help='Enable mean and std logging of hidden states in each transformer layer,'
+                       ' choices: embeddings, input_layernorm, linear_q, linear_k, q_layernorm, k_layernorm,'
+                       ' core_attention, linear_proj, linear_g, pre_mlp_layernorm, mlp.')
     return parser
 
 

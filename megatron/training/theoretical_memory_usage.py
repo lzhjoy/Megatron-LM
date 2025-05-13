@@ -87,6 +87,13 @@ def compute_weight_and_optimizer_memory(args, verbose=False):
                 )
             )
         )
+        if args.attn_output_gate == "full":
+            self_attn_term = args.hidden_size * args.num_attention_heads * args.qk_head_dim
+        elif args.attn_output_gate == "lora":
+            lora_rank = args.hidden_size // 4
+            self_attn_term = lora_rank * (args.num_attention_heads * args.qk_head_dim + args.hidden_size)
+        if args.qk_layernorm:
+            self_attn_term += 4 * args.hidden_size
 
     num_parameters_in_transformer_layer_dense = (
         2

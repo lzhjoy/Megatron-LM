@@ -1100,6 +1100,7 @@ def load_args_from_checkpoint(
     _set_arg('attention_dropout', force=True)
     _set_arg('hidden_dropout', force=True)
     _set_arg('ffn_token_shift', force=True)
+    _set_arg('attn_output_gate', force=True)
 
     _set_arg('hybrid_override_pattern', force=True)
     _set_arg('spec', force=True)
@@ -1114,7 +1115,6 @@ def load_args_from_checkpoint(
     _set_arg('moe_router_pre_softmax', force=True)
     _set_arg('moe_grouped_gemm', force=True)
     _set_arg('moe_shared_expert_intermediate_size', force=True)
-    _set_arg('moe_token_shift', force=True)
 
     # Mamba args.
     _set_arg('mamba_state_dim', force=True)

@@ -3,7 +3,7 @@
 """Utilities for transformer layers."""
 from functools import lru_cache
 from operator import itemgetter
-from typing import Any, Dict, Iterable, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, Optional, Tuple, Union, List
 
 import torch
 
@@ -14,6 +14,149 @@ from megatron.core.utils import (
     make_sharded_tensor_for_checkpoint,
     make_tp_sharded_tensor_for_checkpoint,
 )
+
+
+# GPT logging
+_GPT_LAYER_WISE_LOGGING_TRACKER = {}
+
+
+def get_gpt_layer_wise_logging_tracker():
+    """Return the gpt layer wise tracker."""
+    global _GPT_LAYER_WISE_LOGGING_TRACKER
+    return _GPT_LAYER_WISE_LOGGING_TRACKER
+
+
+def save_to_hidden_states_tracker(
+    name: str,
+    hidden_states: torch.Tensor,
+    layer_number: int,
+    num_layers: int,
+    reduce_group: torch.distributed.ProcessGroup = None,
+    avg_group: torch.distributed.ProcessGroup = None,
+):
+    """Save the mean and std of hidden states for logging.
+    Args:
+        name (str): The name of the hidden states.
+        hidden_states (torch.Tensor): The hidden states tensor.
+        layer_number (int): Layer index of the loss.
+        num_layers (int): The number of total layers.
+        reduce_group (torch.distributed.ProcessGroup): The group for reducing the loss.
+        mean_group (torch.distributed.ProcessGroup): The group for averaging the loss.
+    """
+    # Skip hidden states logging if layer_number is None.
+    if layer_number is None:
+        return
+
+    tracker = get_gpt_layer_wise_logging_tracker()
+    if name not in tracker:
+        tracker[name] = {}
+        tracker[name]["mean"] = torch.zeros(num_layers + 2, device=hidden_states.device)
+        tracker[name]["std"] = torch.zeros(num_layers + 2, device=hidden_states.device)
+        tracker[name]["num_micro_batches"] = torch.zeros(num_layers + 2, device=hidden_states.device)
+
+    # Aggregate the values for the layer.
+    d_hidden_states = hidden_states.detach()
+    tracker[name]["mean"][layer_number] += d_hidden_states.mean()
+    tracker[name]["std"][layer_number] += d_hidden_states.std(dim=-1).mean()
+    tracker[name]["num_micro_batches"][layer_number] += 1
+    tracker[name]["reduce_group"] = reduce_group
+    tracker[name]["avg_group"] = avg_group
+
+
+def clear_hidden_states_tracker():
+    """Clear the hidden states metrics."""
+    tracker = get_gpt_layer_wise_logging_tracker()
+    for name in tracker:
+        tracker[name]["mean"].zero_()
+        tracker[name]["std"].zero_()
+        tracker[name]["num_micro_batches"].zero_()
+        tracker[name]["reduce_group"] = None
+        tracker[name]["avg_group"] = None
+
+
+def reduce_hidden_states_tracker_across_ranks(value_names: Optional[List[str]] = None, track_names: Optional[List[str]] = None):
+    """Collect and reduce the hidden states across ranks."""
+    tracker = get_gpt_layer_wise_logging_tracker()
+    if track_names is None:
+        track_names = tracker.keys()
+    if value_names is None:
+        value_names = ['mean', 'std']
+    for name in track_names:
+        for vlaue_name in value_names:
+            values = tracker[name][vlaue_name]
+            # TODO(Hepteract): delete the usage of the global parallel_state.
+            # Collect aux losses across PP.
+            torch.distributed.all_reduce(
+                values, group=parallel_state.get_pipeline_model_parallel_group()
+            )
+            # Reduce aux losses across ranks.
+            if tracker[name].get('reduce_group') is not None:
+                torch.distributed.all_reduce(values, group=tracker[name].get('reduce_group'))
+            if tracker[name].get('avg_group') is not None:
+                torch.distributed.all_reduce(
+                    values, group=tracker[name]['avg_group'], op=torch.distributed.ReduceOp.AVG
+                )
+
+
+def track_gpt_metrics(
+    iteration: int,
+    writer,
+    wandb_writer=None,
+    per_layer_logging=False,
+    force_initialize: bool = False,
+    track_names: Optional[List[str]] = None,
+    num_layers: Optional[int] = None,
+):
+    """Track the GPT metrics for logging."""
+    value_names = ["std", "mean"]
+
+    # hidden states logging
+    tracker = get_gpt_layer_wise_logging_tracker()
+    # Initialize the tracker if force_initialize is True
+    if force_initialize:
+        if track_names is not None:
+            for key in track_names:
+                if key not in tracker:
+                    tracker[key] = {vn: torch.zeros(num_layers + 2, device="cuda") for vn in value_names}
+                    tracker[key]["reduce_group"] = None
+                    tracker[key]["avg_group"] = None
+    reduce_hidden_states_tracker_across_ranks(value_names, track_names)
+
+    # only the last rank have a writer
+    if writer is not None:
+        value_tensors = {k: {vn: v[vn].float() for vn in value_names} for k, v in tracker.items()}
+        for name, tensor_dict in value_tensors.items():
+
+            # currently when using add_scalars,
+            # torch.utils.add_scalars makes each timer its own run, which
+            # polutes the runs list, so we just add each as a scalar
+            total_scale = tracker[name]['num_micro_batches'].sum()
+            for vn, tensor in tensor_dict.items():
+                writer.add_scalar(f"gpt_{vn}/{name}", tensor.sum() / total_scale, iteration)
+                if per_layer_logging:
+                    for i, val in enumerate(tensor.tolist()):
+                        layer_scale = tracker[name]['num_micro_batches'][i].item()
+                        if layer_scale == 0:
+                            continue
+                        writer.add_scalar(f"gpt_{vn}/layer_{i}_{name}", val / layer_scale, iteration)
+
+            # W&B logging lacks support for logging multiple scalars simultaneously.
+            # As a workaround, we log each scalar individually first, then we can create
+            # a custom panel to manually group them to a single plot.
+            if wandb_writer:
+                for vn, tensor in tensor_dict.items():
+                    wandb_writer.log({f"gpt_{vn}/{name}": tensor.sum() / total_scale}, iteration)
+                    if per_layer_logging:
+                        wandb_writer.log(
+                            {
+                                f"gpt_{vn}/layer_{i}_{name}": loss / nmb
+                                for i, (loss, nmb) in enumerate(zip(tensor.tolist(), tracker[name]['num_micro_batches'].tolist()))
+                                if nmb > 0
+                            },
+                            iteration,
+                        )
+
+    clear_hidden_states_tracker()
 
 
 def get_linear_layer(rows, columns, init_method, perform_initialization=True):

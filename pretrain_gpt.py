@@ -124,6 +124,7 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel, megat
                         moe_use_legacy_grouped_gemm=args.moe_use_legacy_grouped_gemm,
                         qk_l2_norm=args.qk_l2_norm,
                         attn_output_gate=args.attn_output_gate,
+                        log_layer_hidden_states=args.log_layer_hidden_states,
                     )
                 else:
                     transformer_layer_spec = get_gpt_layer_local_spec(
@@ -140,6 +141,7 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel, megat
         if args.mtp_num_layers is not None:
             mtp_block_spec = get_gpt_mtp_block_spec(config, transformer_layer_spec, use_transformer_engine=use_te)
 
+        print(transformer_layer_spec)
         model = GPTModel(
             config=config,
             transformer_layer_spec=transformer_layer_spec,
