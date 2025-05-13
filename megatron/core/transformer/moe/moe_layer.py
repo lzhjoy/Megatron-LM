@@ -164,7 +164,7 @@ class MoELayer(BaseMoELayer):
                 self.token_dispatcher.set_shared_experts(self.shared_experts)
         
         # Whether enable token shift (i.e. short conv)
-        self.moe_token_shift = config.moe_token_shift
+        self.moe_token_shift = config.ffn_token_shift
 
     def forward(self, hidden_states: torch.Tensor):
         if self.training and self.tp_group.size() > 1 and not self.config.sequence_parallel:
@@ -173,13 +173,15 @@ class MoELayer(BaseMoELayer):
                 "are enabled without also enabling sequence parallelism."
             )
 
-        if self.moe_token_shift:
+        if self.moe_token_shift == "cat":
             # [S/TP, B, H]
             H = hidden_states.shape[-1]
             hidden_states = torch.cat([
-                F.pad(hidden_states, (0, 0, 0, 0, 1, 0), "constant", 0)[:-1, :, :H//2],
+                F.pad(hidden_states, (0, 0, 0, 0, 1, -1), "constant", 0)[:-1, :, :H//2],
                 hidden_states[:, :, H//2:],
             ], dim = -1)
+        elif self.moe_token_shift == "subtraction":
+            hidden_states = F.pad(hidden_states, (0, 0, 0, 0, 1, -1), "constant", 0) - hidden_states
 
         # process MoE
         def custom_forward(hidden_states):

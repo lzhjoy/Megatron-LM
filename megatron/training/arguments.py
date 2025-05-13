@@ -1367,8 +1367,9 @@ def _add_network_size_args(parser):
                        'We compute the average of the MTP losses across all depths, '
                        'and multiply it the scaling factor to obtain the overall MTP loss, '
                        'which serves as an additional training objective.')
-    group.add_argument('--ffn-token-shift', action='store_true',
-                       help='Whether to use token time-shift before FFN. https://zhuanlan.zhihu.com/p/399480671')
+    group.add_argument('--ffn-token-shift', type=str, default=None, choices=['cat', 'subtraction'],
+                       help='Whether to use token time-shift before FFN. cat: https://zhuanlan.zhihu.com/p/399480671 '
+                       'subtraction: https://github.com/BlinkDL/RWKV-LM/blob/6bf7ac334fbcea2e2062bb97ed7c4dfca66db186/RWKV-v5/src/model.py#L977')
     group.add_argument('--attn-output-gate', type=str, default=None, choices=['full', 'lora'],
                        help='Whether to use gated attention output.')
     group.add_argument('--emb-deviation-loss-coeff', type=float, default=0,
@@ -2569,8 +2570,6 @@ def _add_moe_args(parser):
     group.add_argument('--moe-use-upcycling', action='store_true',
                        help='Load a checkpoint of a dense model, convert it into an MoE model, and save the converted model to the path specified by --save. '
                        'Upcycling is implemented on the top of distributed checkpointing, so it supports parallel modes different from the dense model.')
-    group.add_argument('--moe-token-shift', action='store_true',
-                       help='Whether to use token time-shift before MoE. https://zhuanlan.zhihu.com/p/399480671')
     # Router arguments
     group.add_argument('--moe-router-load-balancing-type', type=str,
                        choices=['aux_loss', 'seq_aux_loss', 'sinkhorn', 'none'],
