@@ -378,7 +378,7 @@ class DynamicInferenceContext(BaseInferenceContext):
         n = self.padded_active_token_count
         query_seq_idx = self.token_pos_ids[:n]
         query_emb = query_emb[query_seq_idx]
-        query[:n] = apply_rotary_pos_emb(query[:n], query_emb[:n], config, cu_seqlens_q, cp_group)
+        query[:n] = apply_rotary_pos_emb(query[:n], query_emb[:n], config=config, cu_seqlens=cu_seqlens_q, cp_group=cp_group)
         return query
 
     def apply_rotary_emb_key(
@@ -404,9 +404,9 @@ class DynamicInferenceContext(BaseInferenceContext):
         key_emb = key_emb[key_seq_idx]
         if self.is_decode_only():
             assert key.shape[0] == n == self.max_requests
-            key = apply_rotary_pos_emb(key[:n], key_emb[:n], config, cp_group)
+            key = apply_rotary_pos_emb(key[:n], key_emb[:n], config=config, cp_group=cp_group)
         else:
-            key[:n] = apply_rotary_pos_emb(key[:n], key_emb[:n], config, cp_group)
+            key[:n] = apply_rotary_pos_emb(key[:n], key_emb[:n], config=config, cp_group=cp_group)
         return key
 
     def is_memory_available(self, num_chunks: int, safe: bool = False) -> bool:

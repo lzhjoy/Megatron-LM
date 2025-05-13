@@ -1,12 +1,16 @@
 # Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
+import os
+import sys
 
+MEGATRON_BASE = os.path.abspath(os.path.join(os.path.dirname(__file__), os.path.pardir, os.path.pardir, os.path.pardir))
+sys.path.append(MEGATRON_BASE)
 import torch
 from argparse import ArgumentParser
 from collections import defaultdict
 from tqdm import tqdm
 from typing import List
 
-from megatron.core.inference.contexts import (
+from megatron.core.inference.contexts.dynamic_context import (
     ContextOverflowError,
     DynamicInferenceContext,
 )
@@ -24,7 +28,7 @@ from megatron.training import (
 from megatron.training.checkpointing import load_checkpoint
 from pretrain_gpt import model_provider
 
-from .utils import add_common_inference_args, build_requests, get_curr_time, Request
+from utils import add_common_inference_args, build_requests, get_curr_time, Request
 
 
 def add_dynamic_inference_args(parser: ArgumentParser) -> ArgumentParser:
@@ -254,26 +258,17 @@ if __name__ == "__main__":
                                     random_seed=args.seed)
 
     # Print setup.
-    setup_prefix = "dynamic | cg %d | %s | bf %.0f, flw %.1f [r %d, t %d], gtd %.2f [r %d] ... reqs %d" % (
-        args.enable_cuda_graph,
-        (
-            f"<user prompts, n {len(args.prompts)}>"
-            if args.prompts else
-            "<auto prompts> %s, %d, %.1e, %.1e" % (
-                "(%s)" % " ".join(map(str, args.num_tokens_to_prompt)),
-                args.num_tokens_to_generate,
-                args.incoming_requests_duration,
-                args.incoming_requests_per_sec,
-            )
-        ),
-        args.inference_dynamic_batching_buffer_size_gb,
-        args.inference_dynamic_batching_buffer_overflow_factor,
-        context.max_requests,
-        context.max_tokens,
-        args.inference_dynamic_batching_buffer_guaranteed_fraction,
-        context.gtd_request_count,
-        len(requests),
+    prompt = (
+        f"<user prompts, n {len(args.prompts)}>"
+        if args.prompts else
+        "<auto prompts> %s, %d, %.1e, %.1e" % (
+            "(%s)" % " ".join(map(str, args.num_tokens_to_prompt)),
+            args.num_tokens_to_generate,
+            args.incoming_requests_duration,
+            args.incoming_requests_per_sec,
+        )
     )
+    setup_prefix = f"dynamic | cg {args.enable_cuda_graph} | {prompt} | bf {args.inference_dynamic_batching_buffer_size_gb}, flw {args.inference_dynamic_batching_buffer_overflow_factor} [r {context.max_requests}, t {context.max_tokens}], gtd {args.inference_dynamic_batching_buffer_guaranteed_fraction} [r {context.gtd_request_count}] ... reqs {len(requests)}"
     print("~~~")
     print(setup_prefix)
     print("~~~")

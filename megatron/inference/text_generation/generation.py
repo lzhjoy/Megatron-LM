@@ -398,7 +398,7 @@ def beam_search_and_return_on_first_stage(model, forward_step, tokens, lengths, 
                 for beam_token_rank, (token_id, beam_score, beam_id) in enumerate(
                     zip(best_words, best_scores, best_beam_ids)
                 ):
-                    if token_id.item() == stop_token:
+                    if token_id.item() in stop_token:
                         # if beam_token does not belong to top num_beams tokens, it should not be added
                         is_beam_token_worse_than_top_num_beams = beam_token_rank >= beam_size
                         if is_beam_token_worse_than_top_num_beams:

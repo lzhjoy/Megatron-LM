@@ -37,6 +37,8 @@ class TextGenerationController:
     def __init__(self, inference_wrapped_model: AbstractModelInferenceWrapper, tokenizer):
         self.inference_wrapped_model = inference_wrapped_model
         self.tokenizer = tokenizer
+        print(self.inference_wrapped_model)
+        print(self.tokenizer)
 
         # For models without pipeline parallelism, is_first_stage and is_last_stage returns True
         self.model_is_pipeline_parallel = not (
@@ -381,8 +383,8 @@ class TextGenerationController:
             logit_dict = {}
             if generation_started[batch_idx]:
                 for logprob, logprob_index in zip(logprob_values, logprob_indices):
-                    key = self.tokenizer.detokenize([logprob_index])
-                    logit_dict[key] = logprob.item()
+                    # key = self.tokenizer.detokenize([logprob_index])
+                    logit_dict[logprob_index.item()] = (logprob.item())
             top_n_logprobs_dict[batch_idx].append(logit_dict)
 
     def generate_all_output_tokens_static_batch(

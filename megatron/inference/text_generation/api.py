@@ -180,7 +180,7 @@ def beam_search_and_post_process(model,
                                  tokens_to_generate=0,
                                  beam_size=0,
                                  add_BOS=False,
-                                 stop_token=50256,
+                                 stop_token=[50256],
                                  num_return_gen=1,
                                  length_penalty=1,
                                  prevent_newline_after_colon=False,
@@ -208,12 +208,12 @@ def beam_search_and_post_process(model,
 
     return None
 
-def beam_search(model, forward_step, prompts=None, tokens_to_generate=0, beam_size=0, add_BOS=False, stop_token=50256, num_return_gen=1, length_penalty=1, prevent_newline_after_colon=False):
+def beam_search(model, forward_step, prompts=None, tokens_to_generate=0, beam_size=0, add_BOS=False, stop_token=[50256], num_return_gen=1, length_penalty=1, prevent_newline_after_colon=False):
     # Make sure input params are avaialble to all ranks.
     values = [tokens_to_generate,
               beam_size,
               add_BOS,
-              stop_token,
+              *stop_token,
               num_return_gen,
               length_penalty,
               prevent_newline_after_colon]
@@ -221,10 +221,10 @@ def beam_search(model, forward_step, prompts=None, tokens_to_generate=0, beam_si
     tokens_to_generate = int(values_float_tensor[0].item())
     beam_size = int(values_float_tensor[1].item())
     add_BOS = bool(values_float_tensor[2].item())
-    stop_token = int(values_float_tensor[3].item())
-    num_return_gen = int(values_float_tensor[4].item())
-    length_penalty = values_float_tensor[5].item()
-    prevent_newline_after_colon = values_float_tensor[6].item()
+    stop_token = list(map(int, values_float_tensor[3:-3].tolist()))
+    num_return_gen = int(values_float_tensor[-3].item())
+    length_penalty = values_float_tensor[-2].item()
+    prevent_newline_after_colon = values_float_tensor[-1].item()
 
     context_tokens_tensor, context_length_tensor = tokenize_prompts(
         prompts=prompts, tokens_to_generate=tokens_to_generate, add_BOS=add_BOS)

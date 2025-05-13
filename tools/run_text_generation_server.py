@@ -213,11 +213,10 @@ if __name__ == "__main__":
 
     inference_engine = get_inference_engine(args, model)
 
-    if args.enable_cuda_graph:
-        print(f"Running warmup for CUDA graphs...")
-        inference_engine.generate(
-            prompts=["Test prompt"], sampling_params=SamplingParams(num_tokens_to_generate=10)
-        )
+    print(f"Running warmup for CUDA graphs...")
+    inference_engine.generate(
+        prompts=["Test prompt"], sampling_params=SamplingParams(num_tokens_to_generate=10)
+    )
 
     if mpu.is_pipeline_first_stage() and mpu.get_tensor_model_parallel_rank() == 0:
         server = MegatronServer(inference_engine, args)

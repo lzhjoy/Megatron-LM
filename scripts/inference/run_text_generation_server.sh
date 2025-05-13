@@ -2,15 +2,13 @@
 
 cd /volume/ailab4sci/txie/huyiwen/Ubiquant-Pretrain
 
-source /volume/ailab4sci/miniconda/bin/activate
-conda activate megatron
-
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 
 SERVE_PORT=8001
 
 # Evaluation Arguments
 CHECKPOINT=${CHECKPOINT:-${1:-"NOT_EXISTS"}}
+LOAD_ITER=${LOAD_ITER:-${2:-"LATEST"}}
 BATCH_SIZE=${BATCH_SIZE:-1}
 MP_SIZE=${MP_SIZE:-1}
 PP_SIZE=${PP_SIZE:-1}
@@ -35,6 +33,10 @@ if [ $DP_SIZE -ne 1 ]; then
     exit 1
 fi
 
+if [[ -e "${CHECKPOINT}/checkpoint/latest_checkpointed_iteration.txt" ]]; then
+    CHECKPOINT=$CHECKPOINT/checkpoint
+fi
+
 if [[ ! -e "${CHECKPOINT}/latest_checkpointed_iteration.txt" ]]; then
     echo "Error: Checkpoint directory ${CHECKPOINT} not recognized"
     exit 1
@@ -46,6 +48,11 @@ if [ $? -eq 0 ]; then
     exit 1
 fi
 
+EXTRA_ARGS=""
+
+if [ "$LOAD_ITER" != "LATEST" ]; then
+    EXTRA_ARGS=" --ckpt-step $LOAD_ITER $EXTRA_ARGS"
+fi
 
 DISTRIBUTED_ARGS=(
     --nproc_per_node $GPUS_PER_NODE
@@ -55,7 +62,7 @@ DISTRIBUTED_ARGS=(
     --master_port $MASTER_PORT
 )
 
-python -m torch.distributed.launch ${DISTRIBUTED_ARGS[@]} tools/run_text_generation_server.py   \
+torchrun ${DISTRIBUTED_ARGS[@]} tools/run_text_generation_server.py   \
        --tensor-model-parallel-size $MP_SIZE  \
        --pipeline-model-parallel-size $PP_SIZE  \
        --expert-model-parallel-size $EP_SIZE \
@@ -64,4 +71,8 @@ python -m torch.distributed.launch ${DISTRIBUTED_ARGS[@]} tools/run_text_generat
        --seed 42 \
        --bf16 \
        --port $SERVE_PORT \
-       --use-checkpoint-args
+       --flash-decode \
+       --inference-max-seq-length 8192 \
+       --return-log-probs \
+       --use-checkpoint-args \
+       $EXTRA_ARGS
