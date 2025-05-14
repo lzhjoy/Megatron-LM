@@ -182,6 +182,8 @@ class MoELayer(BaseMoELayer):
             ], dim = -1)
         elif self.moe_token_shift == "subtraction":
             hidden_states = F.pad(hidden_states, (0, 0, 0, 0, 1, -1), "constant", 0) - hidden_states
+        elif self.moe_token_shift == "addition":
+            hidden_states = F.pad(hidden_states, (0, 0, 0, 0, 1, -1), "constant", 0) + hidden_states
 
         # process MoE
         def custom_forward(hidden_states):

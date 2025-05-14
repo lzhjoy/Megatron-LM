@@ -1367,7 +1367,7 @@ def _add_network_size_args(parser):
                        'We compute the average of the MTP losses across all depths, '
                        'and multiply it the scaling factor to obtain the overall MTP loss, '
                        'which serves as an additional training objective.')
-    group.add_argument('--ffn-token-shift', type=str, default=None, choices=['cat', 'subtraction'],
+    group.add_argument('--ffn-token-shift', type=str, default=None, choices=['cat', 'subtraction', 'addition'],
                        help='Whether to use token time-shift before FFN. cat: https://zhuanlan.zhihu.com/p/399480671 '
                        'subtraction: https://github.com/BlinkDL/RWKV-LM/blob/6bf7ac334fbcea2e2062bb97ed7c4dfca66db186/RWKV-v5/src/model.py#L977')
     group.add_argument('--attn-output-gate', type=str, default=None, choices=['full', 'lora'],

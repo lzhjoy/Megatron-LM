@@ -145,7 +145,7 @@ class TransformerConfig(ModelParallelConfig):
     multi_latent_attention: bool = False
     """Whether to use multi-latent attention."""
     
-    ffn_token_shift: Optional[Literal['cat', 'subtraction']] = None
+    ffn_token_shift: Optional[Literal['cat', 'subtraction', 'addition']] = None
     """Whether to use token time-shift before FFN/MoE."""
 
     attn_output_gate: Optional[Literal['full', 'lora']] = None

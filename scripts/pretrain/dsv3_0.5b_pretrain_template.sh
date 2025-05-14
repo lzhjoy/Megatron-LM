@@ -13,7 +13,7 @@ OUTPUT_CHECKPOINT_PATH=${OUTPUT_CHECKPOINT_PATH:-"/volume/ailab4sci/txie/huyiwen
 OUTPUT_BASE_PATH=${OUTPUT_BASE_PATH:-"/volume/ailab4sci/txie/huyiwen/megatron_lm_workspace"}
 
 # Training Arguments
-SEQ_LEN=8192
+SEQ_LEN=${SEQ_LEN:-8192}
 BATCH_SIZE=${BATCH_SIZE:-1}
 GLOBAL_BATCH_SIZE=${GLOBAL_BATCH_SIZE:-4096}
 MP_SIZE=${MP_SIZE:-1}

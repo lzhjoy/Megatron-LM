@@ -123,6 +123,8 @@ class MLP(MegatronModule):
             ], dim = -1)
         elif self.ffn_token_shift == "subtraction":
             hidden_states = F.pad(hidden_states, (0, 0, 0, 0, 1, -1), "constant", 0) - hidden_states
+        elif self.ffn_token_shift == "addition":
+            hidden_states = F.pad(hidden_states, (0, 0, 0, 0, 1, -1), "constant", 0) + hidden_states
 
         # [s, b, 4 * h/p]
         intermediate_parallel, bias_parallel = self.linear_fc1(hidden_states)
