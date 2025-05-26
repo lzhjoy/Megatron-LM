@@ -205,7 +205,7 @@ class LanguageModelEmbedding(MegatronModule):
                 embeddings = EmbDeviationLossAutoScaler.apply(embeddings, emb_deviation_loss)
 
         # Log hidden states.
-        if "embeddings" in self.config.log_layer_hidden_states:
+        if isinstance(self.config.log_layer_hidden_states, list) and "embeddings" in self.config.log_layer_hidden_states:
             save_to_hidden_states_tracker("embeddings", embeddings, 0, self.config.num_layers, avg_group=self.sp_group)
 
         return embeddings

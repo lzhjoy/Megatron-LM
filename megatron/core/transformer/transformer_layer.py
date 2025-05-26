@@ -455,7 +455,7 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
             )
         else:
             input_layernorm_output = self.input_layernorm(hidden_states)
-        if "input_layernorm" in self.config.log_layer_hidden_states:
+        if isinstance(self.config.log_layer_hidden_states, list) and "input_layernorm" in self.config.log_layer_hidden_states:
             save_to_hidden_states_tracker(
                 "input_layernorm",
                 input_layernorm_output,
@@ -526,7 +526,7 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
             )
         else:
             pre_mlp_layernorm_output = self.pre_mlp_layernorm(hidden_states)
-        if "pre_mlp_layernorm" in self.config.log_layer_hidden_states:
+        if isinstance(self.config.log_layer_hidden_states, list) and "pre_mlp_layernorm" in self.config.log_layer_hidden_states:
             save_to_hidden_states_tracker(
                 "pre_mlp_layernorm",
                 pre_mlp_layernorm_output,
@@ -576,7 +576,7 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
 
         else:
             mlp_output_with_bias = self.mlp(pre_mlp_layernorm_output)
-        if "mlp" in self.config.log_layer_hidden_states:
+        if isinstance(self.config.log_layer_hidden_states, list) and "mlp" in self.config.log_layer_hidden_states:
             save_to_hidden_states_tracker(
                 "mlp",
                 mlp_output_with_bias,

@@ -162,7 +162,7 @@ def get_gpt_layer_with_transformer_engine_spec(
 
         # If we want to log the output hidden states of input_layernorm,
         # we have to split TELayerNormColumnParallelLinear op.
-        if "input_layernorm" in log_layer_hidden_states:
+        if isinstance(log_layer_hidden_states, list) and "input_layernorm" in log_layer_hidden_states:
             input_layernorm = TENorm
             linear_qkv = TEColumnParallelLinear
         else:

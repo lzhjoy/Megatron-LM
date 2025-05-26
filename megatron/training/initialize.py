@@ -445,6 +445,9 @@ def _warmup_jit_function():
         dtype = torch.float16
     else:
         dtype = torch.float32
+    if args.rank > 0:
+        from time import sleep
+        sleep(args.rank * 5)
 
     # Warmup fused bias+gelu
     bias = torch.rand(

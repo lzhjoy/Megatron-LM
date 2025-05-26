@@ -1096,12 +1096,14 @@ def load_args_from_checkpoint(
     _set_arg('untie_embeddings_and_output_weights', force=True)
     _set_arg('apply_layernorm_1p', force=True)
     _set_arg('normalization', force=True)
+    _set_arg('qk_l2_norm', force=True)
+    _set_arg('qk_layernorm', force=True)
     _set_arg('apply_query_key_layer_scaling', force=True)
     _set_arg('attention_dropout', force=True)
     _set_arg('hidden_dropout', force=True)
     _set_arg('log_layer_hidden_states', force=True)  # this will change model architecture (e.g. separate laryernorm)
     _set_arg('ffn_token_shift', force=True)
-    _set_arg('moe_token_shift', force=True)  # legacy compatibility for inference
+    _set_arg('ffn_token_shift', old_arg_name='moe_token_shift', force=True)  # legacy compatibility for inference
     _set_arg('attn_token_shift', force=True)
     _set_arg('attn_output_gate', force=True)
 

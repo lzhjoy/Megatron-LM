@@ -735,7 +735,8 @@ def validate_args(args, defaults={}):
         assert not args.multi_latent_attention
 
     # Make sure L2Norm and LayerNorm is not enabled at the same time
-    assert not (args.qk_l2_norm and args.qk_layernorm), "Only one can be enabled: qk-l2-norm and qk-layernorm"
+    if args.qk_l2_norm:
+        assert args.qk_layernorm, "qk_layernorm must be Ture when apply L2 normalization to q and k"
 
     # Embedding deviation loss
     if args.emb_deviation_type in ["loss", "square_loss"]:
@@ -855,7 +856,9 @@ def validate_args(args, defaults={}):
     if args.num_experts == 0:
         args.num_experts = None
     if args.num_experts is not None:
-        assert args.spec is None, "Model Spec must be None when using MoEs"
+        assert (
+            args.spec is None or args.spec == ["megatron.core.models.mamba.mamba_layer_specs", "mamba_moe_stack_spec"]
+        ), "Model Spec must be None or 'megatron.core.models.mamba.mamba_layer_specs mamba_moe_stack_spec' when using MoEs"
     if args.moe_expert_capacity_factor == 0:
         args.moe_expert_capacity_factor = None
     if args.num_experts is not None and args.moe_ffn_hidden_size is None:

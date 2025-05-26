@@ -135,6 +135,9 @@ class TransformerConfig(ModelParallelConfig):
     qk_layernorm: bool = False
     """Whether to apply `normalization` type of normalization to the query and key embeddings."""
 
+    qk_l2_norm: bool = False
+    """Whether to apply L2 normalization to the query and key embeddings."""
+
     test_mode: bool = False
     """Whether to run real-time tests."""
 
