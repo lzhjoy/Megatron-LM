@@ -1370,6 +1370,8 @@ def _add_network_size_args(parser):
     group.add_argument('--ffn-token-shift', type=str, default=None, choices=['cat', 'subtraction', 'addition'],
                        help='Whether to use token time-shift before FFN. cat: https://zhuanlan.zhihu.com/p/399480671 '
                        'subtraction: https://github.com/BlinkDL/RWKV-LM/blob/6bf7ac334fbcea2e2062bb97ed7c4dfca66db186/RWKV-v5/src/model.py#L977')
+    group.add_argument('--attn-token-shift', type=str, default=None, choices=['kv_shifting'],
+                       help='Whether to use token time-shift before RoPE and core attention. kv_shifting: http://arxiv.org/abs/2411.19574 ')
     group.add_argument('--attn-output-gate', type=str, default=None, choices=['full', 'lora'],
                        help='Whether to use gated attention output.')
     group.add_argument('--emb-deviation-loss-coeff', type=float, default=0,

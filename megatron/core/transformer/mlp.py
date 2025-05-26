@@ -118,7 +118,7 @@ class MLP(MegatronModule):
             # [S/TP, B, H]
             H = hidden_states.shape[-1]
             hidden_states = torch.cat([
-                F.pad(hidden_states, (0, 0, 0, 0, 1, -1), "constant", 0)[:-1, :, :H//2],
+                F.pad(hidden_states, (0, 0, 0, 0, 1, 0), "constant", 0)[:-1, :, :H//2],
                 hidden_states[:, :, H//2:],
             ], dim = -1)
         elif self.ffn_token_shift == "subtraction":

@@ -67,7 +67,7 @@ class GatedSelfAttention(Attention):
             cp_comm_type=cp_comm_type,
             model_comm_pgs=model_comm_pgs,
         )
-        
+
         self.lora_gate = config.attn_output_gate == "lora"
         if self.lora_gate:
             self.config.g_lora_rank = self.config.hidden_size // 4
@@ -131,13 +131,13 @@ class GatedSelfAttention(Attention):
             )
         else:
             self.k_layernorm = None
-    
-    @torch.compile(dynamic=False)
+
+    @torch.compile(dynamic=True)
     def apply_attn_output_gate(self, context_layer, output_gate):
         output_gate = torch.sigmoid(output_gate.reshape(context_layer.size(0), context_layer.size(1), -1))
         context_layer = context_layer * output_gate
         return context_layer
-    
+
     @torch.compile(dynamic=False, disable=True)
     def get_gate_tensor_lora(self, hidden_states):
         compressed, _ = self.linear_gate_down_proj(hidden_states)

@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from typing import Optional, Tuple, Union
 
 import torch
+from torch import nn
+import torch.nn.functional as F
 from torch import Tensor
 
 from megatron.core import tensor_parallel
@@ -74,6 +76,23 @@ class CrossAttentionSubmodules:
     linear_kv: Union[ModuleSpec, type] = None
     core_attention: Union[ModuleSpec, type] = None
     linear_proj: Union[ModuleSpec, type] = None
+
+
+@torch.compile
+def kv_shifting_attention_convolution(U: torch.Tensor, K: torch.Tensor):
+    """
+    Custom convolution for KV Shifting Attention.
+
+    U: hidden states, [sq, b, np, hn].
+    K: learnables.
+    """
+    _, window_size = K.shape  # window_size = 2 * actual window size
+    U_padded = F.pad(U, (0, 0, 0, 0, 0, 0, window_size - 1, 0))  # [sq+w-1, b, np, hn]
+    U_unfolded = U_padded.unfold(0, window_size, 1)  # [seq+w-1, b, np, hn, w]
+    K_expanded = K.unsqueeze(0).unsqueeze(0).unsqueeze(-2)  # (1, 1, np, 1, w)
+    V_unfolded = U_unfolded * K_expanded  # [sq, b, np, hn, w]
+    V = V_unfolded.sum(dim=-1)
+    return V
 
 
 class Attention(MegatronModule, ABC):
@@ -755,6 +774,14 @@ class SelfAttention(Attention):
         else:
             self.k_layernorm = None
 
+        if config.attn_token_shift == "kv_shifting":
+            K = torch.rand(self.config.num_query_groups ,1)
+            V = torch.rand(self.config.num_query_groups ,1)
+            self.k_shifting = nn.Parameter(torch.cat([K, 1-K],dim=1))
+            self.v_shifting = nn.Parameter(torch.cat([V, 1-V], dim=1))
+        else:
+            self.k_shifting, self.v_shifting = None, None
+
     def run_realtime_tests(self):
         """Performs a consistency check.
 
@@ -872,6 +899,16 @@ class SelfAttention(Attention):
 
         if self.k_layernorm is not None:
             key = self.k_layernorm(key)
+
+        if self.k_shifting is not None:
+            st = get_tensor_model_parallel_rank() * self.num_query_groups_per_partition
+            ed = (get_tensor_model_parallel_rank() + 1) * self.num_query_groups_per_partition
+            key = kv_shifting_attention_convolution(key, self.k_shifting[st:ed])
+
+        if self.v_shifting is not None:
+            st = get_tensor_model_parallel_rank() * self.num_query_groups_per_partition
+            ed = (get_tensor_model_parallel_rank() + 1) * self.num_query_groups_per_partition
+            value = kv_shifting_attention_convolution(value, self.v_shifting[st:ed])
 
         if self.config.test_mode:
             self.run_realtime_tests()

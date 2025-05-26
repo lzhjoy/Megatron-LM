@@ -148,6 +148,9 @@ class TransformerConfig(ModelParallelConfig):
     ffn_token_shift: Optional[Literal['cat', 'subtraction', 'addition']] = None
     """Whether to use token time-shift before FFN/MoE."""
 
+    attn_token_shift: Optional[Literal['kv_shifting']] = None
+    """Whether to use token time-shift before RoPE and core attention."""
+
     attn_output_gate: Optional[Literal['full', 'lora']] = None
     """Whether to use gated attention output"""
 
