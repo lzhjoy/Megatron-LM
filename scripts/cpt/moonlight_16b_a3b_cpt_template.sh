@@ -13,7 +13,7 @@ OUTPUT_CHECKPOINT_PATH=${OUTPUT_CHECKPOINT_PATH:-"/volume/ailab4sci/txie/huyiwen
 OUTPUT_BASE_PATH=${OUTPUT_BASE_PATH:-"/volume/ailab4sci/txie/huyiwen/megatron_lm_workspace"}
 
 # Training Arguments
-SEQ_LEN=8192
+SEQ_LEN=${SEQ_LEN:-8192}
 BATCH_SIZE=${BATCH_SIZE:-1}
 GLOBAL_BATCH_SIZE=${GLOBAL_BATCH_SIZE:-4096}
 MP_SIZE=${MP_SIZE:-1}
@@ -73,7 +73,7 @@ EXTRA_ARGS=${EXTRA_ARGS:-""}
 current_time=$(date "+%Y.%m.%d-%H.%M.%S")
 JOB_ID=${TASK_UUID:-$current_time}
 MODEL_SIZE='0.5b'
-NAME="${NAME_PREFIX}dsv3-${MODEL_SIZE}-q${NUM_ATTN_HEADS}-kv${NUM_QUERY_GROUPS}-ep-${NUM_EXPERTS}-sep-${NUM_SHARED_EXPERTS}-top${MOE_TOPK}-cf-${MOE_EXPERT_CAPACITY_FACTOR}-bias-${MOE_ROUTER_BIAS_UPDATE_RATE}-bf16-ep${EP_SIZE}-mp${MP_SIZE}-pp${PP_SIZE}-lr-${LR}-minlr-${MIN_LR}-bs-${GLOBAL_BATCH_SIZE}-gpus-${WORLD_SIZE}-seqlen-${SEQ_LEN}"
+NAME="${NAME_PREFIX}moonlight-${MODEL_SIZE}-q${NUM_ATTN_HEADS}-kv${NUM_QUERY_GROUPS}-ep-${NUM_EXPERTS}-sep-${NUM_SHARED_EXPERTS}-top${MOE_TOPK}-cf-${MOE_EXPERT_CAPACITY_FACTOR}-bias-${MOE_ROUTER_BIAS_UPDATE_RATE}-bf16-ep${EP_SIZE}-mp${MP_SIZE}-pp${PP_SIZE}-lr-${LR}-minlr-${MIN_LR}-bs-${GLOBAL_BATCH_SIZE}-gpus-${WORLD_SIZE}-seqlen-${SEQ_LEN}"
 CHECKPOINT_PATH="${OUTPUT_CHECKPOINT_PATH}/checkpoint/${NAME}"
 LOG_DIR="${OUTPUT_CHECKPOINT_PATH}/log/${JOB_ID}_${NAME}"
 mkdir -p ${CHECKPOINT_PATH}
@@ -94,7 +94,7 @@ else
 fi
 
 # setup tokenizer
-TOKENIZER_TYPE=${TOKENIZER_TYPE:-'hf_tokenizer_qwen'}
+TOKENIZER_TYPE=${TOKENIZER_TYPE:-'hf_tokenizer_dsv2'}
 DATA_PATH_CACHE="/volume/ailab4sci/txie/huyiwen/cache"
 if [[ ${TOKENIZER_TYPE} == "hf_tokenizer_qwen" ]]; then
     DATA_PATH_TOKENIZED="${DATA_PATH}/qwen2.5"
@@ -105,6 +105,9 @@ elif [[ ${TOKENIZER_TYPE} == "gpt2bpe" ]]; then
 elif [[ ${TOKENIZER_TYPE} == "hf_tokenizer_yulan_mini" ]]; then
     DATA_PATH_TOKENIZED="${DATA_PATH}/yulan_mini"
     TOKENIZER_ARGS="--tokenizer-type HuggingFaceTokenizer --tokenizer-model yulan-team/YuLan-Mini"
+elif [[ ${TOKENIZER_TYPE} == "hf_tokenizer_dsv2" ]]; then
+    DATA_PATH_TOKENIZED="${DATA_PATH}/dsv2"
+    TOKENIZER_ARGS="--tokenizer-type HuggingFaceTokenizer --tokenizer-model ${LOAD_CHECKPOINT_PATH}"
 else
     echo "ERROR: Unknown tokenizer type ${TOKENIZER_TYPE}"
     exit 1
@@ -127,6 +130,14 @@ fi
 if [ -n "$MOE_AUX_LOSS_COEFF" ]; then
     echo "ERROR: DeepSeek V3 does not support MOE_AUX_LOSS_COEFF=$MOE_AUX_LOSS_COEFF"
     exit 1
+fi
+
+# Optimizer offload
+if [ ${OPTIMIZER_OFFLOAD} != false ]; then
+    EXTRA_ARGS="${EXTRA_ARGS} \
+        --optimizer-cpu-offload \
+        --use-precision-aware-optimizer \
+        --optimizer-offload-fraction ${OPTIMIZER_OFFLOAD}"
 fi
 
 # ###################################################
@@ -157,12 +168,15 @@ MODEL_ARGS=(
     --hidden-dropout 0.0
     --normalization RMSNorm
     --position-embedding-type rope
+    --swiglu
     --group-query-attention
     --num-query-groups ${NUM_QUERY_GROUPS}
     --no-masked-softmax-fusion
     --no-position-embedding
     --rotary-base ${ROTARY_BASE}
     --use-flash-attn
+    --no-load-optim  # no publicly available optim
+    --no-load-rng
 )
 
 MOE_ARGS=(
@@ -232,6 +246,8 @@ if [ "1${ACTIVATION_CHECKPOINT}" = "1true" ]; then
 EXTRA_ARGS="${EXTRA_ARGS} \
         --recompute-granularity selective
         "
+elif [ -n "${ACTIVATION_CHECKPOINT}" ]; then
+EXTRA_ARGS="${EXTRA_ARGS} --recompute-granularity ${ACTIVATION_CHECKPOINT} "
 fi
 
 if [ $NODE_RANK == "0" ]; then

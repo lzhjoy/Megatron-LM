@@ -10,7 +10,6 @@ PRETRAINED_CKPT_ROOT_PATH=${PRETRAINED_CKPT_ROOT_PATH:-"/volume/ailab4sci/txie/h
 PRETRAINED_CKPT_ID=${PRETRAINED_CKPT_ID:-"NOT_EXISTS"}
 PRETRAINED_CKPT_NAME=${PRETRAINED_CKPT_NAME:-"NOT_EXISTS"}
 OUTPUT_CHECKPOINT_PATH=${OUTPUT_CHECKPOINT_PATH:-"/volume/ailab4sci/txie/huyiwen/megatron_lm_workspace"}
-OUTPUT_BASE_PATH=${OUTPUT_BASE_PATH:-"/volume/ailab4sci/txie/huyiwen/megatron_lm_workspace"}
 
 # Training Arguments
 SEQ_LEN=${SEQ_LEN:-8192}
@@ -236,6 +235,9 @@ EXTRA_ARGS="${EXTRA_ARGS} \
 fi
 
 if [ $NODE_RANK == "0" ]; then
+    which torchrun >> ${LOG_DIR}/ENV-${HOSTNAME}.log
+    python -V >> ${LOG_DIR}/ENV-${HOSTNAME}.log
+    pip list >> ${LOG_DIR}/ENV-${HOSTNAME}.log
     env >> ${LOG_DIR}/ENV-${HOSTNAME}.log
     echo $(which torchrun) ${DISTRIBUTED_ARGS[@]} ../../pretrain_gpt.py ${MODEL_ARGS[@]} ${DATA_ARGS[@]} ${MOE_ARGS[@]} ${TRAINING_ARGS[@]} ${MODEL_PARALLEL_ARGS[@]} ${LOGGING_ARGS[@]} ${TOKENIZER_ARGS} ${EXTRA_ARGS} >> ${LOG_DIR}/ENV-${HOSTNAME}.log
 fi

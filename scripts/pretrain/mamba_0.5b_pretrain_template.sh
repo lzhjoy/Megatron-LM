@@ -1,8 +1,9 @@
 #!/bin/bash
-# DeepSeek V3 aux-free load balancing
-# 0421 update rate = 1e-3
+# Mamba 0.8B dense
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 export OMP_NUM_THREADS=4
+export TRITON_CACHE_DIR="./triton-cache/"
+# export TRITON_CACHE_MANAGER="megatron.core.ssm.triton_cache_manager:ParallelFileCacheManager"
 
 # Dir Arguments
 DIR=`pwd`
@@ -10,10 +11,9 @@ PRETRAINED_CKPT_ROOT_PATH=${PRETRAINED_CKPT_ROOT_PATH:-"/volume/ailab4sci/txie/h
 PRETRAINED_CKPT_ID=${PRETRAINED_CKPT_ID:-"NOT_EXISTS"}
 PRETRAINED_CKPT_NAME=${PRETRAINED_CKPT_NAME:-"NOT_EXISTS"}
 OUTPUT_CHECKPOINT_PATH=${OUTPUT_CHECKPOINT_PATH:-"/volume/ailab4sci/txie/huyiwen/megatron_lm_workspace"}
-OUTPUT_BASE_PATH=${OUTPUT_BASE_PATH:-"/volume/ailab4sci/txie/huyiwen/megatron_lm_workspace"}
 
 # Training Arguments
-SEQ_LEN=8192
+SEQ_LEN=${SEQ_LEN:-8192}
 BATCH_SIZE=${BATCH_SIZE:-1}
 GLOBAL_BATCH_SIZE=${GLOBAL_BATCH_SIZE:-4096}
 MP_SIZE=${MP_SIZE:-1}
@@ -38,18 +38,19 @@ LR_WARMUP_SAMPLES=$(( ${LR_WARMUP_TOKENS//_/}  / ${SEQ_LEN} ))
 SAVE_INTERVAL=$(( ${SAVE_TOKENS//_/} / ${SEQ_LEN} / ${GLOBAL_BATCH_SIZE} ))
 
 # MoE Arguments
-MOE_FFN_HIDDEN_SIZE=${MOE_FFN_HIDDEN_SIZE:-768}
-MOE_TOPK=${MOE_TOPK:-2}
-NUM_EXPERTS=${NUM_EXPERTS:-16}
-NUM_SHARED_EXPERTS=${NUM_SHARED_EXPERTS:-0}
-LOAD_BALANCING=${LOAD_BALANCING:-"dsv3"}
-MOE_ROUTER_SCORE_FUNCTION=${MOE_ROUTER_SCORE_FUNCTION:-"sigmoid"}
-MOE_EXPERT_CAPACITY_FACTOR=${MOE_EXPERT_CAPACITY_FACTOR:-2}
-MOE_ROUTER_BIAS_UPDATE_RATE=${MOE_ROUTER_BIAS_UPDATE_RATE:-1e-3}
+FFN_HIDDEN_SIZE=${FFN_HIDDEN_SIZE:-4096}
+# MOE_FFN_HIDDEN_SIZE=${MOE_FFN_HIDDEN_SIZE:-768}
+# MOE_TOPK=${MOE_TOPK:-2}
+# NUM_EXPERTS=${NUM_EXPERTS:-16}
+# NUM_SHARED_EXPERTS=${NUM_SHARED_EXPERTS:-0}
+# LOAD_BALANCING=${LOAD_BALANCING:-"dsv3"}
+# MOE_ROUTER_SCORE_FUNCTION=${MOE_ROUTER_SCORE_FUNCTION:-"sigmoid"}
+# MOE_EXPERT_CAPACITY_FACTOR=${MOE_EXPERT_CAPACITY_FACTOR:-2}
+# MOE_ROUTER_BIAS_UPDATE_RATE=${MOE_ROUTER_BIAS_UPDATE_RATE:-1e-3}
 
 # Model Arguments
-INIT_STD=${INIT_STD:-0.006}
-NUM_LAYERS=${NUM_LAYERS:-12}
+INIT_STD=${INIT_STD:-0.02}
+NUM_LAYERS=${NUM_LAYERS:-48}
 HIDDEN_SIZE=${HIDDEN_SIZE:-1024}
 NUM_ATTN_HEADS=16
 NUM_QUERY_GROUPS=2
@@ -73,7 +74,7 @@ EXTRA_ARGS=${EXTRA_ARGS:-""}
 current_time=$(date "+%Y.%m.%d-%H.%M.%S")
 JOB_ID=${TASK_UUID:-$current_time}
 MODEL_SIZE='0.5b'
-NAME="${NAME_PREFIX}dsv3-${MODEL_SIZE}-q${NUM_ATTN_HEADS}-kv${NUM_QUERY_GROUPS}-ep-${NUM_EXPERTS}-sep-${NUM_SHARED_EXPERTS}-top${MOE_TOPK}-cf-${MOE_EXPERT_CAPACITY_FACTOR}-bias-${MOE_ROUTER_BIAS_UPDATE_RATE}-bf16-ep${EP_SIZE}-mp${MP_SIZE}-pp${PP_SIZE}-lr-${LR}-minlr-${MIN_LR}-bs-${GLOBAL_BATCH_SIZE}-gpus-${WORLD_SIZE}-seqlen-${SEQ_LEN}"
+NAME="${NAME_PREFIX}mamba-${MODEL_SIZE}-q${NUM_ATTN_HEADS}-kv${NUM_QUERY_GROUPS}-hybrid${HYBRID_ATTN}-bf16-mp${MP_SIZE}-pp${PP_SIZE}-lr-${LR}-minlr-${MIN_LR}-bs-${GLOBAL_BATCH_SIZE}-gpus-${WORLD_SIZE}-seqlen-${SEQ_LEN}"
 CHECKPOINT_PATH="${OUTPUT_CHECKPOINT_PATH}/checkpoint/${NAME}"
 LOG_DIR="${OUTPUT_CHECKPOINT_PATH}/log/${JOB_ID}_${NAME}"
 mkdir -p ${CHECKPOINT_PATH}
@@ -145,18 +146,22 @@ DISTRIBUTED_ARGS=(
 
 MODEL_ARGS=(
     --use-mcore-models
+    --hybrid-attention-ratio ${HYBRID_ATTN}
+    --hybrid-mlp-ratio 0.5
+    --spec megatron.core.models.mamba.mamba_layer_specs mamba_stack_spec
     --disable-bias-linear
     --seq-length ${SEQ_LEN}
     --max-position-embeddings ${SEQ_LEN}
     --num-layers ${NUM_LAYERS}
     --hidden-size ${HIDDEN_SIZE}
-    --ffn-hidden-size ${MOE_FFN_HIDDEN_SIZE}
+    --ffn-hidden-size ${FFN_HIDDEN_SIZE}
     --num-attention-heads ${NUM_ATTN_HEADS}
     --init-method-std ${INIT_STD}
     --attention-dropout 0.0
     --hidden-dropout 0.0
     --normalization RMSNorm
     --position-embedding-type rope
+    --swiglu
     --group-query-attention
     --num-query-groups ${NUM_QUERY_GROUPS}
     --no-masked-softmax-fusion
@@ -165,19 +170,19 @@ MODEL_ARGS=(
     --use-flash-attn
 )
 
-MOE_ARGS=(
-    --num-experts ${NUM_EXPERTS}
-    --expert-tensor-parallel-size 1
-    --moe-grouped-gemm
-    --moe-router-topk ${MOE_TOPK}
-    --moe-router-load-balancing-type ${LOAD_BALANCING}
-    --moe-router-score-function sigmoid
-    --moe-token-dispatcher-type alltoall
-    --overlap-param-gather
-    --overlap-grad-reduce
-    --moe-expert-capacity-factor ${MOE_EXPERT_CAPACITY_FACTOR}
-    --moe-router-bias-update-rate ${MOE_ROUTER_BIAS_UPDATE_RATE}
-)
+# MOE_ARGS=(
+#     --num-experts ${NUM_EXPERTS}
+#     --expert-tensor-parallel-size 1
+#     --moe-grouped-gemm
+#     --moe-router-topk ${MOE_TOPK}
+#     --moe-router-load-balancing-type ${LOAD_BALANCING}
+#     --moe-router-score-function sigmoid
+#     --moe-token-dispatcher-type alltoall
+#     --overlap-param-gather
+#     --overlap-grad-reduce
+#     --moe-expert-capacity-factor ${MOE_EXPERT_CAPACITY_FACTOR}
+#     --moe-router-bias-update-rate ${MOE_ROUTER_BIAS_UPDATE_RATE}
+# )
 
 TRAINING_ARGS=(
     --micro-batch-size ${BATCH_SIZE}
@@ -195,17 +200,20 @@ TRAINING_ARGS=(
     --bf16
     --save ${CHECKPOINT_PATH}
     --load ${LOAD_CHECKPOINT_PATH}
+    --overlap-param-gather
+    --overlap-grad-reduce
 )
 
 DATA_ARGS=(
     --data-path ${DATA_PATH_TOKENIZED}
     --data-cache-path ${DATA_PATH_CACHE}
+    --no-create-attention-mask-in-dataloader
 )
 
 MODEL_PARALLEL_ARGS=(
     --tensor-model-parallel-size ${MP_SIZE}
     --pipeline-model-parallel-size ${PP_SIZE}
-    --expert-model-parallel-size ${EP_SIZE}
+    # --expert-model-parallel-size ${EP_SIZE}
     --use-distributed-optimizer
     --sequence-parallel
 )
@@ -239,11 +247,11 @@ if [ $NODE_RANK == "0" ]; then
     python -V >> ${LOG_DIR}/ENV-${HOSTNAME}.log
     pip list >> ${LOG_DIR}/ENV-${HOSTNAME}.log
     env >> ${LOG_DIR}/ENV-${HOSTNAME}.log
-    echo $(which torchrun) ${DISTRIBUTED_ARGS[@]} ../../pretrain_gpt.py ${MODEL_ARGS[@]} ${DATA_ARGS[@]} ${MOE_ARGS[@]} ${TRAINING_ARGS[@]} ${MODEL_PARALLEL_ARGS[@]} ${LOGGING_ARGS[@]} ${TOKENIZER_ARGS} ${EXTRA_ARGS} >> ${LOG_DIR}/ENV-${HOSTNAME}.log
+    echo $(which torchrun) ${DISTRIBUTED_ARGS[@]} ../../pretrain_mamba.py ${MODEL_ARGS[@]} ${DATA_ARGS[@]} ${MOE_ARGS[@]} ${TRAINING_ARGS[@]} ${MODEL_PARALLEL_ARGS[@]} ${LOGGING_ARGS[@]} ${TOKENIZER_ARGS} ${EXTRA_ARGS} >> ${LOG_DIR}/ENV-${HOSTNAME}.log
 fi
 set -x
 
-torchrun ${DISTRIBUTED_ARGS[@]} ../../pretrain_gpt.py \
+torchrun ${DISTRIBUTED_ARGS[@]} ../../pretrain_mamba.py \
     ${MODEL_ARGS[@]} \
     ${DATA_ARGS[@]} \
     ${MOE_ARGS[@]} \
