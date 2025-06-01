@@ -1377,6 +1377,8 @@ def _add_network_size_args(parser):
                        help='Whether to use token time-shift before RoPE and core attention. kv_shifting: http://arxiv.org/abs/2411.19574 ')
     group.add_argument('--attn-output-gate', type=str, default=None, choices=['full', 'lora'],
                        help='Whether to use gated attention output.')
+    group.add_argument('--attn-gate-activation', type=str, default=None, choices=['sigmoid'],
+                       help='Activation function of gated attention.')
     group.add_argument('--emb-deviation-loss-coeff', type=float, default=0,
                        help='Scaling coefficient for the embedding devication loss. Default 0 means disabled.')
     group.add_argument('--emb-deviation-type', type=str, default=None, choices=['loss', 'square_loss'],
