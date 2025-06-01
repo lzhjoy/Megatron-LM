@@ -774,11 +774,17 @@ class SelfAttention(Attention):
         else:
             self.k_layernorm = None
 
+        self.attn_token_shift = config.attn_token_shift
         if config.attn_token_shift == "kv_shifting":
             K = torch.rand(self.config.num_query_groups ,1)
             V = torch.rand(self.config.num_query_groups ,1)
-            self.k_shifting = nn.Parameter(torch.cat([K, 1-K],dim=1))
-            self.v_shifting = nn.Parameter(torch.cat([V, 1-V], dim=1))
+            self.k_shifting = nn.Parameter(torch.stack([K, 1-K],dim=1).reshape(-1, 1))
+            self.v_shifting = nn.Parameter(torch.stack([V, 1-V], dim=1).reshape(-1, 1))
+        elif config.attn_token_shift == "kv_shifting_half":
+            K = torch.rand(self.config.num_query_groups ,1)
+            V = torch.rand(self.config.num_query_groups ,1)
+            self.k_shifting = nn.Parameter(K,dim=1)
+            self.v_shifting = nn.Parameter(V, dim=1)
         else:
             self.k_shifting, self.v_shifting = None, None
 
@@ -903,12 +909,19 @@ class SelfAttention(Attention):
         if self.k_shifting is not None:
             st = get_tensor_model_parallel_rank() * self.num_query_groups_per_partition
             ed = (get_tensor_model_parallel_rank() + 1) * self.num_query_groups_per_partition
-            key = kv_shifting_attention_convolution(key, self.k_shifting[st:ed])
+            if self.attn_token_shift == "kv_shifting_one":
+                key = kv_shifting_attention_convolution(key, self.k_shifting[st:ed])
+            else:
+                # since there's two learnable parameters
+                key = kv_shifting_attention_convolution(key, self.k_shifting[st*2:ed*2])
 
         if self.v_shifting is not None:
             st = get_tensor_model_parallel_rank() * self.num_query_groups_per_partition
             ed = (get_tensor_model_parallel_rank() + 1) * self.num_query_groups_per_partition
-            value = kv_shifting_attention_convolution(value, self.v_shifting[st:ed])
+            if self.attn_token_shift == "kv_shifting_one":
+                value = kv_shifting_attention_convolution(value, self.v_shifting[st:ed])
+            else:
+                value = kv_shifting_attention_convolution(value, self.v_shifting[st*2:ed*2])
 
         if self.config.test_mode:
             self.run_realtime_tests()
