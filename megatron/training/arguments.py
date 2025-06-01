@@ -1383,6 +1383,10 @@ def _add_network_size_args(parser):
                        help='Scaling coefficient for the embedding devication loss. Default 0 means disabled.')
     group.add_argument('--emb-deviation-type', type=str, default=None, choices=['loss', 'square_loss'],
                        help='The embedding deviation mitigation strategy.')
+    group.add_argument('--window-size', type=int, nargs=2, default=None,  
+                       help='Window size for sliding window attention. '  
+                       'Specify as two integers: [forward_window, backward_window]. '  
+                       'Use -1 for infinite window size. Example: --window-size 2048 0')
     return parser
 
 
