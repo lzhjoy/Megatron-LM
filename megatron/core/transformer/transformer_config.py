@@ -157,9 +157,6 @@ class TransformerConfig(ModelParallelConfig):
     attn_output_gate: Optional[Literal['full', 'lora']] = None
     """Whether to use gated attention output"""
 
-    attn_gate_activation: Optional[Literal['sigmoid']] = None
-    """Activation of attention gate. Default is no activation."""
-
     emb_deviation_loss_coeff: float = 0
     """Scaling coefficient for the embedding devication loss."""
 

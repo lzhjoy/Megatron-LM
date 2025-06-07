@@ -69,7 +69,6 @@ class GatedSelfAttention(Attention):
         )
 
         self.lora_gate = config.attn_output_gate == "lora"
-        self.gate_activation = config.attn_gate_activation
         if self.lora_gate:
             self.config.g_lora_rank = self.config.hidden_size // 4
             assert submodules.linear_gate_down_proj is not None and submodules.linear_gate_up_proj is not None
@@ -260,9 +259,6 @@ class GatedSelfAttention(Attention):
             gate = self.get_gate_tensor_lora(hidden_states)
         else:
             query, gate = torch.chunk(query, 2, dim=-1)
-
-        if self.gate_activation == "sigmoid":
-            gate = torch.nn.functional.sigmoid(gate)
 
         # [sq, b, ng, np/ng * hn] -> [sq, b, np, hn]
         query = query.reshape(query.size(0), query.size(1), -1, self.hidden_size_per_attention_head)

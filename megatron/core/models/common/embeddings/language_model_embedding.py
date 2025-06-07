@@ -197,12 +197,14 @@ class LanguageModelEmbedding(MegatronModule):
                 emb_deviation_loss = (embeddings.mean() ** 2) * self.config.emb_deviation_loss_coeff
             elif self.config.emb_deviation_type == "loss":
                 emb_deviation_loss = torch.abs(embeddings.mean()) * self.config.emb_deviation_loss_coeff
+
+            if self.config.emb_deviation_type == "mean":
+                embeddings = embeddings - embeddings.mean(dim=-1, keepdim=True)
             else:
-                raise ValueError(f"Unkonw type '{self.config.emb_deviation_type}'")
-            if self.config.calculate_per_token_loss:
-                embeddings = EmbDeviationLossAutoScaler.apply(embeddings, emb_deviation_loss * embeddings.shape[0])
-            else:
-                embeddings = EmbDeviationLossAutoScaler.apply(embeddings, emb_deviation_loss)
+                if self.config.calculate_per_token_loss:
+                    embeddings = EmbDeviationLossAutoScaler.apply(embeddings, emb_deviation_loss * embeddings.shape[0])
+                else:
+                    embeddings = EmbDeviationLossAutoScaler.apply(embeddings, emb_deviation_loss)
 
         # Log hidden states.
         if isinstance(self.config.log_layer_hidden_states, list) and "embeddings" in self.config.log_layer_hidden_states:
