@@ -552,6 +552,9 @@ class TransformerConfig(ModelParallelConfig):
 
     mamba_state_dim: int = 128
     """The dimensionality of the state representation in Mamba layers."""
+    
+    mamba_expand: int = 2
+    """The expand factor used in Mamba layers."""
 
     mamba_head_dim: int = 64
     """The dimensionality of the heads in the Mamba layers."""

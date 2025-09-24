@@ -113,7 +113,7 @@ class MambaMixer(MegatronModule):
         d_model,
         d_conv=4,
         conv_init=None,
-        expand=2,
+        expand=None,
         A_init_range=(1, 16),
         D_has_hdim=False,
         rmsnorm=True,
@@ -135,6 +135,11 @@ class MambaMixer(MegatronModule):
     ):
         super().__init__(config)
         self.config = config
+        
+        if expand is None:
+            expand = self.config.mamba_expand
+        # print(f"[DEBUG] expand: {expand}")
+
         self.d_model = d_model
         self.d_conv = d_conv
         self.conv_init = conv_init

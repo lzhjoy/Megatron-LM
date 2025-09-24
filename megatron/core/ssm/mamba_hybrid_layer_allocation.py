@@ -104,7 +104,7 @@ def allocate_layers(
             raise ValueError(
                 "The number of each type of layer in the override "
                 "pattern must match the number in the overridden "
-                "pattern."
+                "pattern. {} {}".format(layer_type_list_override, layer_type_list)
             )
         if layer_type_list_override == layer_type_list:
             log_single_rank(

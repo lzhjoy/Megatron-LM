@@ -1860,6 +1860,8 @@ def _add_training_args(parser):
                        choices=['nccl', 'ucc'],
                        help='Select a communicator backend for pipeline parallel communication. '
                        'If None, the default backend will be used.')
+    group.add_argument('--freeze-non-mamba', action='store_true',
+                       help='Freeze non-mamba parameters.')
 
     return parser
 
@@ -2761,6 +2763,8 @@ def _add_experimental_args(parser):
                        help='Number of heads for Mamba layers.'
                        'If not set, then the number of heads will be '
                        '--hidden-size * expand // --mamba-head-dim')
+    group.add_argument('--mamba-expand', type=int, default=2,
+                       help='Expand factor for Mamba layers.')
     group.add_argument('--is-hybrid-model', default=False, action="store_true",
                        help='Indicates whether the model is a hybrid model.')
     group.add_argument('--disable-mamba-mem-eff-path', default=False, action="store_true",
