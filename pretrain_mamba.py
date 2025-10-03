@@ -2,33 +2,29 @@
 """Pretrain Mamba."""
 
 import os
-import torch
 from functools import partial
 from typing import List, Optional, Tuple, Union
 
-from megatron.training import get_args
-from megatron.training import print_rank_0
-from megatron.training import get_timers
-from megatron.training import get_tokenizer
+import torch
 from megatron.core import mpu
+from megatron.core.datasets.blended_megatron_dataset_builder import \
+    BlendedMegatronDatasetBuilder
+from megatron.core.datasets.gpt_dataset import (GPTDataset, GPTDatasetConfig,
+                                                MockGPTDataset)
 from megatron.core.enums import ModelType
-from megatron.core.datasets.blended_megatron_dataset_builder import BlendedMegatronDatasetBuilder
-from megatron.core.datasets.gpt_dataset import GPTDatasetConfig
-from megatron.core.datasets.gpt_dataset import MockGPTDataset, GPTDataset
-from megatron.core.rerun_state_machine import get_rerun_state_machine
+from megatron.core.models.gpt.gpt_layer_specs import \
+    get_gpt_layer_with_transformer_engine_spec
 from megatron.core.models.mamba import MambaModel
-from megatron.training import pretrain
-from megatron.core.utils import StragglerDetector
+from megatron.core.rerun_state_machine import get_rerun_state_machine
 from megatron.core.transformer import TransformerConfig
 from megatron.core.transformer.spec_utils import import_module
-from megatron.training.utils import (
-    get_batch_on_this_cp_rank,
-    get_batch_on_this_tp_rank,
-    get_blend_and_blend_per_split,
-)
+from megatron.core.utils import StragglerDetector
+from megatron.training import (get_args, get_timers, get_tokenizer, pretrain,
+                               print_rank_0)
 from megatron.training.arguments import core_transformer_config_from_args
-from megatron.core.models.gpt.gpt_layer_specs import get_gpt_layer_with_transformer_engine_spec
-
+from megatron.training.utils import (get_batch_on_this_cp_rank,
+                                     get_batch_on_this_tp_rank,
+                                     get_blend_and_blend_per_split)
 
 stimer = StragglerDetector()
 
@@ -195,13 +191,13 @@ def forward_step(data_iterator, model: MambaModel):
     timers('batch-generator', log_level=2).start()
     global stimer
     with stimer(bdata=True):
-        tokens, labels, loss_mask, attention_mask, position_ids = get_batch(
+        tokens, labels, loss_mask, attention_mask, position_ids, dropout_mask = get_batch(
             data_iterator)
     timers('batch-generator').stop()
 
     with stimer:
         output_tensor = model(tokens, position_ids, attention_mask,
-                              labels=labels)
+                              labels=labels, dropout_mask=dropout_mask)
 
     return output_tensor, partial(loss_func, loss_mask)
 

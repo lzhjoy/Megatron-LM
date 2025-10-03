@@ -3,15 +3,16 @@
 """General utilities."""
 import json
 import os
-import sys
 import subprocess
+import sys
 from datetime import datetime
 from functools import lru_cache
 
 import torch
 
 try:
-    from transformer_engine.pytorch.optimizers import multi_tensor_applier, multi_tensor_l2norm
+    from transformer_engine.pytorch.optimizers import (multi_tensor_applier,
+                                                       multi_tensor_l2norm)
 except ImportError:
     try:
         from amp_C import multi_tensor_l2norm
@@ -30,25 +31,23 @@ except ImportError:
             local_multi_tensor_applier as multi_tensor_applier,
         )
 
-from megatron.training import (
-    get_args,
-    get_adlr_autoresume,
-)
 from megatron.core import DistributedDataParallel as DDP
-from megatron.core.distributed.custom_fsdp import FullyShardedDataParallel as custom_FSDP
 from megatron.core import mpu
 from megatron.core.datasets.utils import get_blend_from_list
-from megatron.core.tensor_parallel import param_is_not_tensor_parallel_duplicate
-from megatron.core.utils import (
-    get_batch_on_this_cp_rank,
-    get_data_parallel_group_if_dtensor,
-    to_local_if_dtensor,
-)
+from megatron.core.distributed.custom_fsdp import \
+    FullyShardedDataParallel as custom_FSDP
+from megatron.core.tensor_parallel import \
+    param_is_not_tensor_parallel_duplicate
 from megatron.core.transformer.module import Float16Module
+from megatron.core.utils import (get_batch_on_this_cp_rank,
+                                 get_data_parallel_group_if_dtensor,
+                                 to_local_if_dtensor)
 from megatron.legacy.model.module import param_is_not_shared
+from megatron.training import get_adlr_autoresume, get_args
 
 try:
-    from megatron.core.distributed import TorchFullyShardedDataParallel as torch_FSDP
+    from megatron.core.distributed import \
+        TorchFullyShardedDataParallel as torch_FSDP
     ALL_MODULE_WRAPPER_CLASSNAMES = (DDP, torch_FSDP, custom_FSDP, Float16Module)
 except ImportError:
     ALL_MODULE_WRAPPER_CLASSNAMES = (DDP, custom_FSDP, Float16Module)
@@ -540,6 +539,10 @@ def get_batch_on_this_tp_rank(data_iterator):
            'attention_mask': None if "attention_mask" not in data else data["attention_mask"].cuda(non_blocking = True),
            'position_ids': data["position_ids"].cuda(non_blocking = True)
        }
+       if "dropout_mask" in data:
+            batch['dropout_mask'] = data["dropout_mask"].cuda(non_blocking=True)
+       else:
+            batch['dropout_mask'] = torch.empty_like(batch["loss_mask"], dtype=torch.bool)
 
        if args.pipeline_model_parallel_size == 1:
            _broadcast(batch['tokens'])
@@ -547,11 +550,13 @@ def get_batch_on_this_tp_rank(data_iterator):
            _broadcast(batch['loss_mask'])
            _broadcast(batch['attention_mask'])
            _broadcast(batch['position_ids'])
+           _broadcast(batch['dropout_mask'])
 
        elif mpu.is_pipeline_first_stage():
            _broadcast(batch['tokens'])
            _broadcast(batch['attention_mask'])
            _broadcast(batch['position_ids'])
+           _broadcast(batch['dropout_mask'])
 
        elif mpu.is_pipeline_last_stage():
            # Multi-Token Prediction (MTP) layers need tokens and position_ids to calculate embedding.
@@ -576,6 +581,7 @@ def get_batch_on_this_tp_rank(data_iterator):
        else:
            attention_mask=None
        position_ids=torch.empty((args.micro_batch_size,args.seq_length), dtype = torch.int64 , device = torch.cuda.current_device())
+       dropout_mask=torch.empty((args.micro_batch_size,args.seq_length), dtype = torch.bool , device = torch.cuda.current_device())
 
        if args.pipeline_model_parallel_size == 1:
            _broadcast(tokens)
@@ -583,6 +589,7 @@ def get_batch_on_this_tp_rank(data_iterator):
            _broadcast(loss_mask)
            _broadcast(attention_mask)
            _broadcast(position_ids)
+           _broadcast(dropout_mask)
 
        elif mpu.is_pipeline_first_stage():
            labels=None
@@ -591,6 +598,7 @@ def get_batch_on_this_tp_rank(data_iterator):
            _broadcast(tokens)
            _broadcast(attention_mask)
            _broadcast(position_ids)
+           _broadcast(dropout_mask)
 
        elif mpu.is_pipeline_last_stage():
            # Multi-Token Prediction (MTP) layers need tokens and position_ids to calculate embedding.
@@ -612,7 +620,8 @@ def get_batch_on_this_tp_rank(data_iterator):
            'labels': labels,
            'loss_mask': loss_mask,
            'attention_mask': attention_mask,
-           'position_ids': position_ids
+           'position_ids': position_ids,
+           'dropout_mask': dropout_mask,
        }
 
     return batch

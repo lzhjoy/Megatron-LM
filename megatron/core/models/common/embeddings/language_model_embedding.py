@@ -142,19 +142,67 @@ class LanguageModelEmbedding(MegatronModule):
             self.tokentype_embeddings.weight.data.fill_(0)
             self.tokentype_embeddings.weight.shared = True
 
-    def forward(self, input_ids: Tensor, position_ids: Tensor, tokentype_ids: int = None) -> Tensor:
+    def forward(self, input_ids: Tensor, position_ids: Tensor, tokentype_ids: int = None, target_dataset_mask: Tensor = None) -> Tensor:
         """Forward pass of the embedding module.
 
         Args:
             input_ids (Tensor): The input tokens
             position_ids (Tensor): The position id's used to calculate position embeddings
-            tokentype_ids (int): The token type ids. Used when args.bert_binary_head is
-                set to True. Defaults to None
+            tokentype_ids (int): The token type ids. Used when args.bert_binary_head is set to True. Defaults to None
+            target_dataset_mask (Tensor): Whether to apply dropout for each token.
 
         Returns:
             Tensor: The output embeddings
         """
         word_embeddings = self.word_embeddings(input_ids)
+
+        from megatron.training import get_args
+
+        args = get_args()
+        # print('args.word_embedding_dropout_prob: ', args.word_embedding_dropout_prob)
+        
+        if (self.training and
+            hasattr(args, 'word_embedding_dropout_prob') and
+            args.word_embedding_dropout_prob > 0.0 and
+            target_dataset_mask is not None):
+
+            # 将target_dataset_mask中的2替换为1，3替换为0
+            target_dataset_mask = torch.where(target_dataset_mask == 2, 1, 
+                     torch.where(target_dataset_mask == 3, 0, target_dataset_mask))
+            
+            
+            p_max = args.word_embedding_dropout_prob
+            batch_size = target_dataset_mask.shape[0]
+
+            # 为每个序列生成一个 [0, 1] 之间的随机数，然后乘以 p_max
+            # dynamic_probs_per_sequence 形状: [batch_size]
+            dynamic_probs_per_sequence = torch.rand(
+                batch_size, 
+                device=target_dataset_mask.device
+            ) * p_max
+
+            # 为了广播，将其变形为 [batch_size, 1]
+            dynamic_probs_per_sequence = dynamic_probs_per_sequence.unsqueeze(1)
+
+            # 为每个 token 生成一个 [0, 1] 的随机数
+            per_token_rand = torch.rand_like(target_dataset_mask, dtype=torch.float32)
+
+            # 一个 token 被 dropout，当且仅当它的随机数小于它所在序列的动态概率
+            # PyTorch 的广播机制会自动处理这里的比较
+            # ( [b, s] < [b, 1] ) -> [b, s]
+            dropout_mask = per_token_rand < dynamic_probs_per_sequence
+
+            # 只有当一个 token 既属于目标数据集，又被选中 dropout 时，才最终被置零
+            final_mask = target_dataset_mask & dropout_mask
+
+            # 扩展掩码维度以匹配 embedding 张量
+            # final_mask: [b, s] -> [b, s, 1]
+            final_mask = final_mask.unsqueeze(-1)
+            
+            # 在原位(in-place)将选中的词向量置零
+            word_embeddings = word_embeddings.masked_fill(final_mask, 0.0)
+
+
         if self.add_position_embedding:
             position_embeddings = self.position_embeddings(position_ids)
             embeddings = word_embeddings + position_embeddings

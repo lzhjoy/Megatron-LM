@@ -125,19 +125,99 @@ def test_gpt_dataset_with_loss_mask():
     # else:
     #     compile_helpers()
 
+    def _get_compressed(dataset,
+                        idx: int,
+                        offset: int = 0,
+                        length: int = None) -> numpy.ndarray:
+        """Get the compressed loss mask for a given index"""
+        print("=================")
+        result = dataset.get(idx)
+        total_length = sum(result[1::2])
+        if offset > 0 or length is not None:
+            start_length = 0
+            start_idx = 0
+            end_length = None if offset > 0 else 0
+            end_idx = 0
+            add_start = None
+            add_end = None
+            delta_start = False
+            for value, repeat in zip(result[0::2], result[1::2]):
+                print(">>>> start", start_length, start_idx, end_length,
+                      end_idx)
+                # find start point
+                if end_length is None:
+                    if start_length + repeat >= offset:
+                        add_start = [value, start_length + repeat - offset]
+                        end_idx = start_idx
+                        end_length = start_length - offset
+                    start_length += repeat
+                    start_idx += 1
+
+                if length is None and start_length >= offset:  # skip find end point
+                    end_idx = len(result) // 2
+                    break
+
+                # find end point
+                print(">>>> end", end_length, end_idx)
+                if end_length is not None:
+                    if end_length + repeat > length:
+                        if end_length < 0:
+                            delta_start = True
+                            break
+                        add_end = [value, length - end_length]
+                        break
+                    end_length += repeat
+                    end_idx += 1
+
+            if add_start is None or add_start[1] == 0:
+                add_start = []
+            if delta_start:
+                add_start = [add_start[0], length]
+            if add_end is None or add_end[1] == 0:
+                add_end = []
+
+            result = numpy.concatenate([
+                numpy.array(add_start, dtype=result.dtype),
+                result[start_idx * 2:end_idx * 2],
+                numpy.array(add_end, dtype=result.dtype),
+            ])
+
+        print("get_compressed", add_start, start_idx, start_length, end_idx,
+              add_end, idx, offset, length, result)
+        if length is not None:
+            assert sum(result[1::2]) == length
+        else:
+            assert sum(result[1::2]) == total_length - offset
+        return result
+
+    print(_get_compressed({1: numpy.array([1, 10, 0, 10])}, 1, 4, None))
+    print(_get_compressed({1: numpy.array([1, 10, 0, 10])}, 1, 14, None))
+
+    print(_get_compressed({1: numpy.array([1, 10, 0, 10])}, 1, 0, 3))
+    print(_get_compressed({1: numpy.array([1, 10, 0, 10])}, 1, 0, 10))
+    print(_get_compressed({1: numpy.array([1, 10, 0, 10])}, 1, 0, 14))
+
+    print(_get_compressed({1: numpy.array([1, 10, 0, 10])}, 1, 4, 3))
+    print(_get_compressed({1: numpy.array([1, 10, 0, 10])}, 1, 4, 10))
+
+    print(_get_compressed({1: numpy.array([1, 10, 0, 10])}, 1, 14, 3))
+
     data_path = []
     for i in range(16):
-        d = f"/data/pretrain-linear-moe-dev/cache/datasets/IvanHU/aabcfab61cae2f6879866e11565c09b0a397c4690ee346b3135cd60c22f9d390/worker_{i}_input_ids_tmp"
+        # d = f"/data/pretrain-linear-moe-dev/cache/datasets/IvanHU/aabcfab61cae2f6879866e11565c09b0a397c4690ee346b3135cd60c22f9d390/worker_{i}_input_ids_tmp"
+        d = f"/data/pretrain-linear-moe-dev/cache/datasets/IvanHU/069b39e9a8fe08f7/worker_{i}_input_ids_tmp"
         if os.path.getsize(d + ".bin") > 0:
             data_path.append("1")
             data_path.append(d)
 
     tokenizer = _NullTokenizer(vocab_size=_MOCK_VOCAB_SIZE)
+    blend = get_blend_from_list(data_path)
+    print(blend)
 
     config = GPTDatasetConfig(
         random_seed=1234,
         sequence_length=1024,
-        blend=get_blend_from_list(data_path),
+        blend=blend,
         split="100,0,0",
         reset_position_ids=True,
         reset_attention_mask=True,
@@ -148,28 +228,17 @@ def test_gpt_dataset_with_loss_mask():
 
     dataset, val_dataset, test_dataset = BlendedMegatronDatasetBuilder(
         GPTDataset, [100, 100, 100], lambda: True, config).build()
-    print(type(dataset))
-
-    batch = dataset[0]
-    tokens = batch["tokens"].numpy()
-    labels = batch["labels"].numpy()
-    loss_mask = batch["loss_mask"].numpy()
-    attention_mask = batch["attention_mask"].numpy()
-    position_ids = batch["position_ids"].numpy()
-    print(tokens, tokens.shape)
-    print(labels, labels.shape)
-    print(loss_mask, loss_mask.shape)
-    print(attention_mask, attention_mask.shape)
-    print(position_ids, position_ids.shape)
-    # print(batch["dropout_mask"].numpy())
+    print(
+        type(dataset))  # megatron.core.datasets.blended_dataset.BlendedDataset
 
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(
         "/data/pretrain-linear-moe/preprocess/modify_tokenizer/YuLan-Mini-Qwen-Template"
     )
 
-    def print_text(text):
-        print(text)
+    def print_text(batch):
+        text = tokenizer.decode(batch['tokens'])
+        print(text[:100])
         print("[1]", text.count('[1]'))
         print("[2]", text.count('[2]'))
         print("[3]", text.count('[3]'))
@@ -182,13 +251,25 @@ def test_gpt_dataset_with_loss_mask():
         print("[32]", text.count('[32]'))
         print("[33]", text.count('[33]'))
         print("[34]", text.count('[34]'))
+        tokens = batch["tokens"].numpy()
+        labels = batch["labels"].numpy()
+        loss_mask = batch["loss_mask"].numpy()
+        attention_mask = batch["attention_mask"].numpy()
+        position_ids = batch["position_ids"].numpy()
+        dropout_mask = batch["dropout_mask"]
+        print("tokens", tokens, tokens.shape)
+        print("labels", labels, labels.shape)
+        print("loss_mask", loss_mask, loss_mask.shape)
+        print("attention_mask", attention_mask, attention_mask.shape)
+        print("position_ids", position_ids, position_ids.shape)
+        print("dropout_mask", dropout_mask)
 
-    text = tokenizer.decode(tokens)
-    print_text(text)
-
-    for batch in dataset:
-        text = tokenizer.decode(batch["tokens"])
-        print_text(text)
+    for idx, batch in enumerate(dataset):
+        print(idx)
+        print_text(batch)
+        print("===========================================")
+        if idx > 20:
+            break
 
 
 if __name__ == "__main__":

@@ -1541,6 +1541,8 @@ def _add_regularization_args(parser):
                        help='Post attention dropout probability.')
     group.add_argument('--hidden-dropout', type=float, default=0.1,
                        help='Dropout probability for hidden state transformer.')
+    group.add_argument('--word-embedding-dropout-prob', type=float, default=0.0,
+                       help='Probability for word embedding dropout.')
     group.add_argument('--weight-decay', type=float, default=0.01,
                        help='Weight decay coefficient for L2 regularization.')
     group.add_argument('--start-weight-decay', type=float,
