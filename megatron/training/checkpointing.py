@@ -1106,6 +1106,7 @@ def load_args_from_checkpoint(
     _set_arg('ffn_token_shift', old_arg_name='moe_token_shift', force=True)  # legacy compatibility for inference
     _set_arg('attn_token_shift', force=True)
     _set_arg('attn_output_gate', force=True)
+    _set_arg('path_attention', force=True)
     _set_arg('window_size', force=True)
 
     # legacy compatibility for inference

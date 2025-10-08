@@ -125,6 +125,7 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel, megat
                         qk_l2_norm=args.qk_l2_norm,
                         attn_output_gate=args.attn_output_gate,
                         log_layer_hidden_states=args.log_layer_hidden_states,
+                        path_attention=args.path_attention,
                     )
                 else:
                     transformer_layer_spec = get_gpt_layer_local_spec(
@@ -136,6 +137,7 @@ def model_provider(pre_process=True, post_process=True) -> Union[GPTModel, megat
                         qk_l2_norm=args.qk_l2_norm,
                         normalization=args.normalization,
                         attn_output_gate=args.attn_output_gate,
+                        path_attention=args.path_attention,
                     )
         mtp_block_spec = None
         if args.mtp_num_layers is not None:
@@ -268,7 +270,7 @@ def forward_step(data_iterator, model: GPTModel):
     timers('batch-generator', log_level=2).start()
     global stimer
     with stimer(bdata=True):
-        tokens, labels, loss_mask, attention_mask, position_ids = get_batch(
+        tokens, labels, loss_mask, attention_mask, position_ids, dropout_mask = get_batch(
             data_iterator)
     timers('batch-generator').stop()
 
@@ -278,7 +280,7 @@ def forward_step(data_iterator, model: GPTModel):
                                 labels=labels)
         else:
             output_tensor = model(tokens, position_ids, attention_mask,
-                                labels=labels, loss_mask=loss_mask)
+                                labels=labels, loss_mask=loss_mask, dropout_mask=dropout_mask)
 
     # [ModelOpt]: model is needed to access ModelOpt distillation losses
     return output_tensor, partial(loss_func, loss_mask, model=model)

@@ -2,16 +2,16 @@
 
 import warnings
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Tuple, Union, Literal
+from typing import Callable, List, Literal, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
-
 from megatron.core.enums import Fp8Recipe
 from megatron.core.transformer.enums import AttnBackend
 
 from ..model_parallel_config import ModelParallelConfig
-from ..utils import get_te_version, init_method_normal, is_te_min_version, scaled_init_method_normal
+from ..utils import (get_te_version, init_method_normal, is_te_min_version,
+                     scaled_init_method_normal)
 
 
 @dataclass
@@ -147,7 +147,7 @@ class TransformerConfig(ModelParallelConfig):
 
     multi_latent_attention: bool = False
     """Whether to use multi-latent attention."""
-    
+
     ffn_token_shift: Optional[Literal['cat', 'subtraction', 'addition']] = None
     """Whether to use token time-shift before FFN/MoE."""
 
@@ -162,6 +162,9 @@ class TransformerConfig(ModelParallelConfig):
 
     emb_deviation_type: Optional[str] = None
     """The embedding deviation mitigation strategy. Support: loss, square_loss"""
+
+    path_attention: Optional[Literal["full"]] = None
+    """Whether to use PaTH attention. http://arxiv.org/abs/2505.16381"""
 
     ####################
     # initialization
@@ -199,7 +202,7 @@ class TransformerConfig(ModelParallelConfig):
     apply_query_key_layer_scaling is True."""
 
     disable_bf16_reduced_precision_matmul: bool = False
-    """If True, sets torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction=False to 
+    """If True, sets torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction=False to
     prevent matmul from using reduced precision accumulation when using BF16."""
 
     ####################
@@ -264,7 +267,7 @@ class TransformerConfig(ModelParallelConfig):
     "moe_act": recompute the MoE MLP activation function.
     "layernorm": recompute the input_layernorm and pre_mlp_layernorm.
     "mla_up_proj": recompute the MLA up projection and RoPE applying parts.
-    "mlp": recompute the dense MLP submodule. 
+    "mlp": recompute the dense MLP submodule.
     "moe": recompute the MoE layer.
     "moe_act", "layernorm", and "mla_up_proj" use output-discarding checkpointing,
     "core_attn", "mlp", and "moe" uses normal checkpointing.
@@ -413,7 +416,7 @@ class TransformerConfig(ModelParallelConfig):
     in a global batch, where the bias is increased for the experts with less assigned tokens
     and decreased for the experts with more assigned tokens.
     The default value 1e-3 is same as that used in DeepSeekV3."""
-    
+
     moe_router_bias_update_method: Literal["sign", "rms_norm"] = "sign"
     """The expert bias update method. https://spaces.ac.cn/archives/10815
     The default value sign is same as that used in DeepSeekV3."""
@@ -544,7 +547,7 @@ class TransformerConfig(ModelParallelConfig):
     """ Whether we should instantiate a separate RNG tracker for inference. """
 
     mrope_section: Optional[List[int]] = None
-    """ Multimodal rope section is for channel dimension of temporal, height and width 
+    """ Multimodal rope section is for channel dimension of temporal, height and width
     in rope calculation. """
 
     is_hybrid_model: bool = False
@@ -552,7 +555,7 @@ class TransformerConfig(ModelParallelConfig):
 
     mamba_state_dim: int = 128
     """The dimensionality of the state representation in Mamba layers."""
-    
+
     mamba_expand: int = 2
     """The expand factor used in Mamba layers."""
 
@@ -563,7 +566,7 @@ class TransformerConfig(ModelParallelConfig):
     """The number of groups used in Mamba layers."""
 
     mamba_num_heads: Optional[int] = None
-    """The number of heads used in Mamba layers. 
+    """The number of heads used in Mamba layers.
     If None, the number of heads will be hidden_size * expand // mamba_head_dim."""
 
     use_mamba_mem_eff_path: bool = True
@@ -954,9 +957,7 @@ class TransformerConfig(ModelParallelConfig):
                 raise ValueError("rotary_interleaved does not work with apply_rope_fusion.")
 
             from megatron.core.models.common.embeddings.rope_utils import (
-                fused_apply_rotary_pos_emb,
-                fused_apply_rotary_pos_emb_thd,
-            )
+                fused_apply_rotary_pos_emb, fused_apply_rotary_pos_emb_thd)
 
             if fused_apply_rotary_pos_emb is None and fused_apply_rotary_pos_emb_thd is None:
                 raise ValueError(
@@ -1062,12 +1063,9 @@ class TransformerConfig(ModelParallelConfig):
 
         if self.moe_permute_fusion:
             from megatron.core.transformer.moe.moe_utils import (
-                fused_permute,
-                fused_permute_with_probs,
+                fused_permute, fused_permute_with_probs,
                 fused_sort_chunks_by_index,
-                fused_sort_chunks_by_index_with_probs,
-                fused_unpermute,
-            )
+                fused_sort_chunks_by_index_with_probs, fused_unpermute)
 
             if (
                 fused_permute is None

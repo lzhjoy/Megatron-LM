@@ -53,7 +53,6 @@ from megatron.core.transformer.torch_norm import WrappedTorchNorm
 
 try:
     import apex  # pylint: disable=unused-import
-
     from megatron.core.fusions.fused_layer_norm import FusedLayerNorm
 
     HAVE_APEX = True
@@ -78,6 +77,7 @@ def get_gpt_layer_with_transformer_engine_spec(
     qk_l2_norm: Optional[bool] = False,
     attn_output_gate: Optional[Literal['lora', 'full']] = None,
     log_layer_hidden_states: Optional[list] = None,
+    path_attention: Optional[Literal["full"]] = None,
 ) -> ModuleSpec:
     """Use this spec to use lower-level Transformer Engine modules (required for fp8 training).
 
@@ -142,6 +142,48 @@ def get_gpt_layer_with_transformer_engine_spec(
                 mlp_bda=get_bias_dropout_add,
             ),
         )
+    elif path_attention is not None:
+        from megatron.core.transformer.path_attention import (
+            ParallelPaTHAttention, PaTHAttention, PaTHAttentionSubmodules)
+
+        # TENorm significantly harms convergence when used
+        # for QKLayerNorm if TE Version < 1.9;
+        # we instead use the Apex implementation.
+        qk_norm = TENorm if is_te_min_version("1.9.0") else FusedLayerNorm
+
+        # If we want to log the output hidden states of input_layernorm,
+        # we have to split TELayerNormColumnParallelLinear op.
+        if isinstance(log_layer_hidden_states, list) and "input_layernorm" in log_layer_hidden_states:
+            input_layernorm = TENorm
+            linear_qkv = TEColumnParallelLinear
+        else:
+            input_layernorm = IdentityOp
+            linear_qkv = TELayerNormColumnParallelLinear
+
+        return ModuleSpec(
+            module=TransformerLayer,
+            submodules=TransformerLayerSubmodules(
+                input_layernorm=input_layernorm,
+                self_attention=ModuleSpec(
+                    module=PaTHAttention,
+                    submodules=PaTHAttentionSubmodules(
+                        linear_qkv=linear_qkv,
+                        core_attention=ParallelPaTHAttention,
+                        linear_proj=TERowParallelLinear,
+                        q_layernorm=(
+                            L2Norm if qk_l2_norm else (qk_norm if qk_layernorm else IdentityOp)
+                        ),
+                        k_layernorm=(
+                            L2Norm if qk_l2_norm else (qk_norm if qk_layernorm else IdentityOp)
+                        ),
+                    ),
+                ),
+                self_attn_bda=get_bias_dropout_add,
+                pre_mlp_layernorm=TENorm if num_experts else IdentityOp,
+                mlp=mlp,
+                mlp_bda=get_bias_dropout_add,
+            ),
+        )
     else:
         if attn_output_gate is not None:
             self_attn_module = GatedSelfAttention
@@ -168,6 +210,7 @@ def get_gpt_layer_with_transformer_engine_spec(
         else:
             input_layernorm = IdentityOp
             linear_qkv = TELayerNormColumnParallelLinear
+
         return ModuleSpec(
             module=TransformerLayer,
             submodules=TransformerLayerSubmodules(
@@ -206,6 +249,7 @@ def get_gpt_layer_local_spec(
     normalization: Optional[str] = None,
     qk_l2_norm: Optional[bool] = False,
     attn_output_gate: Optional[Literal['lora', 'full']] = None,
+    path_attention: Optional[Literal["full"]] = None,
 ) -> ModuleSpec:
     """Use this spec for an implementation using only modules in Megatron-Core.
 
@@ -268,6 +312,38 @@ def get_gpt_layer_local_spec(
                 mlp_bda=get_bias_dropout_add,
             ),
         )
+    elif path_attention is not None:
+        from megatron.core.transformer.path_attention import (
+            ParallelPaTHAttention, PaTHAttention, PaTHAttentionSubmodules)
+
+        return ModuleSpec(
+            module=TransformerLayer,
+            submodules=TransformerLayerSubmodules(
+                input_layernorm=LNImpl,
+                self_attention=ModuleSpec(
+                    module=PaTHAttention,
+                    submodules=PaTHAttentionSubmodules(
+                        linear_qkv=ColumnParallelLinear,
+                        core_attention=ParallelPaTHAttention,
+                        linear_proj=RowParallelLinear,
+                        q_layernorm=(
+                            L2Norm if qk_l2_norm else (LNImpl if qk_layernorm else IdentityOp)
+                        ),
+                        k_layernorm=(
+                            L2Norm if qk_l2_norm else (LNImpl if qk_layernorm else IdentityOp)
+                        ),
+                    ),
+                ),
+                self_attn_bda=get_bias_dropout_add,
+                pre_mlp_layernorm=LNImpl,
+                mlp=mlp,
+                mlp_bda=get_bias_dropout_add,
+                sharded_state_dict_keys_map={
+                    'input_layernorm.': 'self_attention.linear_qkv.layer_norm_',
+                    'pre_mlp_layernorm.': 'mlp.linear_fc1.layer_norm_',
+                },
+            ),
+        )
     else:
         if attn_output_gate is not None:
             self_attn_module = GatedSelfAttention
@@ -280,7 +356,7 @@ def get_gpt_layer_local_spec(
             self_attn_module = SelfAttention
             self_attn_submodules = SelfAttentionSubmodules
             self_attn_kwargs = {}
-        
+
         return ModuleSpec(
             module=TransformerLayer,
             submodules=TransformerLayerSubmodules(
