@@ -94,17 +94,28 @@ fi
 TOKENIZER_TYPE=${TOKENIZER_TYPE:-'hf_tokenizer_qwen'}
 DATA_PATH_CACHE="/volume/ailab4sci/txie/huyiwen/cache"
 if [[ ${TOKENIZER_TYPE} == "hf_tokenizer_qwen" ]]; then
-    DATA_PATH_TOKENIZED="${DATA_PATH}/qwen2.5"
+    [ -z "${DATA_PATH_TOKENIZED}" ] && DATA_PATH_TOKENIZED="${DATA_PATH}/qwen2.5"
     TOKENIZER_ARGS="--tokenizer-type HuggingFaceTokenizer --tokenizer-model ../../tokenizer"
 elif [[ ${TOKENIZER_TYPE} == "gpt2bpe" ]]; then
-    DATA_PATH_TOKENIZED="${DATA_PATH}"
+    [ -z "${DATA_PATH_TOKENIZED}" ] && DATA_PATH_TOKENIZED="${DATA_PATH}"
     TOKENIZER_ARGS="--vocab-file /volume/ailab4sci/models/gpt2/vocab.json --merge-file /volume/ailab4sci/models/gpt2/merges.txt"
 elif [[ ${TOKENIZER_TYPE} == "hf_tokenizer_yulan_mini" ]]; then
-    DATA_PATH_TOKENIZED="${DATA_PATH}/yulan_mini"
+    [ -z "${DATA_PATH_TOKENIZED}" ] && DATA_PATH_TOKENIZED="${DATA_PATH}/yulan_mini"
+    TOKENIZER_ARGS="--tokenizer-type HuggingFaceTokenizer --tokenizer-model yulan-team/YuLan-Mini"
+elif [[ ${TOKENIZER_TYPE} == "mock" ]]; then
     TOKENIZER_ARGS="--tokenizer-type HuggingFaceTokenizer --tokenizer-model yulan-team/YuLan-Mini"
 else
     echo "ERROR: Unknown tokenizer type ${TOKENIZER_TYPE}"
     exit 1
+fi
+if [ ! -z "${DATA_PATH_TOKENIZED}" ] && [ ! -f "${DATA_PATH_TOKENIZED}.idx" ]; then
+    echo "ERROR: ${DATA_PATH_TOKENIZED}.idx is not found"
+    exit 1
+fi
+if [[ ${TOKENIZER_TYPE} == "mock" ]]; then
+    DATA_PATH_ARGS='--mock-data'
+else
+    DATA_PATH_ARGS="--data-path ${DATA_PATH_TOKENIZED} --data-cache-path ${DATA_PATH_CACHE}"
 fi
 
 # setup embedding tying
@@ -183,8 +194,8 @@ TRAINING_ARGS=(
 )
 
 DATA_ARGS=(
-    --data-path ${DATA_PATH_TOKENIZED}
-    --data-cache-path ${DATA_PATH_CACHE}
+    # --data-path ${DATA_PATH_TOKENIZED}
+    # --data-cache-path ${DATA_PATH_CACHE}
 )
 
 MODEL_PARALLEL_ARGS=(
@@ -224,12 +235,13 @@ if [ $NODE_RANK == "0" ]; then
     python -V >> ${LOG_DIR}/ENV-${HOSTNAME}.log
     pip list >> ${LOG_DIR}/ENV-${HOSTNAME}.log
     env >> ${LOG_DIR}/ENV-${HOSTNAME}.log
-    echo $(which torchrun) ${DISTRIBUTED_ARGS[@]} ../../pretrain_gpt.py ${MODEL_ARGS[@]} ${DATA_ARGS[@]} ${MOE_ARGS[@]} ${TRAINING_ARGS[@]} ${MODEL_PARALLEL_ARGS[@]} ${LOGGING_ARGS[@]} ${TOKENIZER_ARGS} ${EXTRA_ARGS} >> ${LOG_DIR}/ENV-${HOSTNAME}.log
+    echo $(which torchrun) ${DISTRIBUTED_ARGS[@]} ../../pretrain_gpt.py ${MODEL_ARGS[@]} ${DATA_PATH_ARGS[@]} ${DATA_ARGS[@]} ${MOE_ARGS[@]} ${TRAINING_ARGS[@]} ${MODEL_PARALLEL_ARGS[@]} ${LOGGING_ARGS[@]} ${TOKENIZER_ARGS} ${EXTRA_ARGS} >> ${LOG_DIR}/ENV-${HOSTNAME}.log
 fi
 set -x
 
 torchrun ${DISTRIBUTED_ARGS[@]} ../../pretrain_gpt.py \
     ${MODEL_ARGS[@]} \
+    ${DATA_PATH_ARGS[@]} \
     ${DATA_ARGS[@]} \
     ${MOE_ARGS[@]} \
     ${TRAINING_ARGS[@]} \

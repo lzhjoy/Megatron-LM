@@ -17,7 +17,6 @@ BATCH_SIZE=${BATCH_SIZE:-1}
 GLOBAL_BATCH_SIZE=${GLOBAL_BATCH_SIZE:-4096}
 MP_SIZE=${MP_SIZE:-1}
 PP_SIZE=${PP_SIZE:-1}
-EP_SIZE=${EP_SIZE:-4}
 ACTIVATION_CHECKPOINT=${ACTIVATION_CHECKPOINT:-"false"}
 LOG_INTERVAL=${LOG_INTERVAL:-1}
 
@@ -36,21 +35,12 @@ LR_DECAY_SAMPLES=$(( ${LR_DECAY_TOKENS//_/}  / ${SEQ_LEN} ))
 LR_WARMUP_SAMPLES=$(( ${LR_WARMUP_TOKENS//_/}  / ${SEQ_LEN} ))
 SAVE_INTERVAL=$(( ${SAVE_TOKENS//_/} / ${SEQ_LEN} / ${GLOBAL_BATCH_SIZE} ))
 
-# MoE Arguments
-MOE_FFN_HIDDEN_SIZE=${MOE_FFN_HIDDEN_SIZE:-768}
-MOE_TOPK=${MOE_TOPK:-2}
-NUM_EXPERTS=${NUM_EXPERTS:-16}
-NUM_SHARED_EXPERTS=${NUM_SHARED_EXPERTS:-0}
-LOAD_BALANCING=${LOAD_BALANCING:-"dsv3"}
-MOE_ROUTER_SCORE_FUNCTION=${MOE_ROUTER_SCORE_FUNCTION:-"sigmoid"}
-MOE_EXPERT_CAPACITY_FACTOR=${MOE_EXPERT_CAPACITY_FACTOR:-2}
-MOE_ROUTER_BIAS_UPDATE_RATE=${MOE_ROUTER_BIAS_UPDATE_RATE:-1e-3}
-
 # Model Arguments
 INIT_STD=${INIT_STD:-0.006}
-NUM_LAYERS=${NUM_LAYERS:-12}
-HIDDEN_SIZE=${HIDDEN_SIZE:-1024}
-NUM_ATTN_HEADS=16
+NUM_LAYERS=${NUM_LAYERS:-24}
+HIDDEN_SIZE=${HIDDEN_SIZE:-896}
+FFN_HIDDEN_SIZE=${FFN_HIDDEN_SIZE:-4864}
+NUM_ATTN_HEADS=14
 NUM_QUERY_GROUPS=2
 ROTARY_BASE=${ROTARY_BASE:-"100000"}
 TIE_EMBEDDING=${TIE_EMBEDDING:-"true"}
@@ -72,7 +62,7 @@ EXTRA_ARGS=${EXTRA_ARGS:-""}
 current_time=$(date "+%Y.%m.%d-%H.%M.%S")
 JOB_ID=${TASK_UUID:-$current_time}
 MODEL_SIZE='0.5b'
-NAME="${NAME_PREFIX}dsv3-${MODEL_SIZE}-q${NUM_ATTN_HEADS}-kv${NUM_QUERY_GROUPS}-ep-${NUM_EXPERTS}-sep-${NUM_SHARED_EXPERTS}-top${MOE_TOPK}-cf-${MOE_EXPERT_CAPACITY_FACTOR}-bias-${MOE_ROUTER_BIAS_UPDATE_RATE}-bf16-ep${EP_SIZE}-mp${MP_SIZE}-pp${PP_SIZE}-lr-${LR}-minlr-${MIN_LR}-bs-${GLOBAL_BATCH_SIZE}-gpus-${WORLD_SIZE}-seqlen-${SEQ_LEN}"
+NAME="${NAME_PREFIX}dense-${MODEL_SIZE}-q${NUM_ATTN_HEADS}-kv${NUM_QUERY_GROUPS}-bf16-mp${MP_SIZE}-pp${PP_SIZE}-lr-${LR}-minlr-${MIN_LR}-bs-${GLOBAL_BATCH_SIZE}-gpus-${WORLD_SIZE}-seqlen-${SEQ_LEN}"
 CHECKPOINT_PATH="${OUTPUT_CHECKPOINT_PATH}/checkpoint/${NAME}"
 LOG_DIR="${OUTPUT_CHECKPOINT_PATH}/log/${JOB_ID}_${NAME}"
 mkdir -p ${CHECKPOINT_PATH}
@@ -160,7 +150,7 @@ MODEL_ARGS=(
     --max-position-embeddings ${SEQ_LEN}
     --num-layers ${NUM_LAYERS}
     --hidden-size ${HIDDEN_SIZE}
-    --ffn-hidden-size ${MOE_FFN_HIDDEN_SIZE}
+    --ffn-hidden-size ${FFN_HIDDEN_SIZE}
     --num-attention-heads ${NUM_ATTN_HEADS}
     --init-method-std ${INIT_STD}
     --attention-dropout 0.0
@@ -174,20 +164,6 @@ MODEL_ARGS=(
     --no-position-embedding
     --rotary-base ${ROTARY_BASE}
     --use-flash-attn
-)
-
-MOE_ARGS=(
-    --num-experts ${NUM_EXPERTS}
-    --expert-tensor-parallel-size 1
-    --moe-grouped-gemm
-    --moe-router-topk ${MOE_TOPK}
-    --moe-router-load-balancing-type ${LOAD_BALANCING}
-    --moe-router-score-function sigmoid
-    --moe-token-dispatcher-type alltoall
-    --overlap-param-gather
-    --overlap-grad-reduce
-    --moe-expert-capacity-factor ${MOE_EXPERT_CAPACITY_FACTOR}
-    --moe-router-bias-update-rate ${MOE_ROUTER_BIAS_UPDATE_RATE}
 )
 
 TRAINING_ARGS=(
@@ -209,12 +185,12 @@ TRAINING_ARGS=(
 )
 
 DATA_ARGS=(
+    --no-create-attention-mask-in-dataloader
 )
 
 MODEL_PARALLEL_ARGS=(
     --tensor-model-parallel-size ${MP_SIZE}
     --pipeline-model-parallel-size ${PP_SIZE}
-    --expert-model-parallel-size ${EP_SIZE}
     --use-distributed-optimizer
     --sequence-parallel
 )
@@ -248,7 +224,7 @@ if [ $NODE_RANK == "0" ]; then
     python -V >> ${LOG_DIR}/ENV-${HOSTNAME}.log
     pip list >> ${LOG_DIR}/ENV-${HOSTNAME}.log
     env >> ${LOG_DIR}/ENV-${HOSTNAME}.log
-    echo $(which torchrun) ${DISTRIBUTED_ARGS[@]} ../../pretrain_gpt.py ${MODEL_ARGS[@]} ${DATA_PATH_ARGS[@]} ${DATA_ARGS[@]} ${MOE_ARGS[@]} ${TRAINING_ARGS[@]} ${MODEL_PARALLEL_ARGS[@]} ${LOGGING_ARGS[@]} ${TOKENIZER_ARGS} ${EXTRA_ARGS} >> ${LOG_DIR}/ENV-${HOSTNAME}.log
+    echo $(which torchrun) ${DISTRIBUTED_ARGS[@]} ../../pretrain_gpt.py ${MODEL_ARGS[@]} ${DATA_PATH_ARGS[@]} ${DATA_ARGS[@]} ${TRAINING_ARGS[@]} ${MODEL_PARALLEL_ARGS[@]} ${LOGGING_ARGS[@]} ${TOKENIZER_ARGS} ${EXTRA_ARGS} >> ${LOG_DIR}/ENV-${HOSTNAME}.log
 fi
 set -x
 
@@ -256,7 +232,6 @@ torchrun ${DISTRIBUTED_ARGS[@]} ../../pretrain_gpt.py \
     ${MODEL_ARGS[@]} \
     ${DATA_PATH_ARGS[@]} \
     ${DATA_ARGS[@]} \
-    ${MOE_ARGS[@]} \
     ${TRAINING_ARGS[@]} \
     ${MODEL_PARALLEL_ARGS[@]} \
     ${LOGGING_ARGS[@]} \
