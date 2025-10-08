@@ -13,3 +13,7 @@ wandb/
 onelogger.log
 onelogger.err
 triton-cache/
+tmp*
+torchelastic_*
+pymp-*
+torchinductor_*
