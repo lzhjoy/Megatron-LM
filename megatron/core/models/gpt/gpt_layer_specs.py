@@ -77,7 +77,7 @@ def get_gpt_layer_with_transformer_engine_spec(
     qk_l2_norm: Optional[bool] = False,
     attn_output_gate: Optional[Literal['lora', 'full']] = None,
     log_layer_hidden_states: Optional[list] = None,
-    path_attention: Optional[Literal["full"]] = None,
+    path_attention: Optional[Literal["full", "full_rope"]] = None,
 ) -> ModuleSpec:
     """Use this spec to use lower-level Transformer Engine modules (required for fp8 training).
 
@@ -155,10 +155,10 @@ def get_gpt_layer_with_transformer_engine_spec(
         # we have to split TELayerNormColumnParallelLinear op.
         if isinstance(log_layer_hidden_states, list) and "input_layernorm" in log_layer_hidden_states:
             input_layernorm = TENorm
-            linear_qkv = TEColumnParallelLinear
+            linear_qkvwb = TEColumnParallelLinear
         else:
             input_layernorm = IdentityOp
-            linear_qkv = TELayerNormColumnParallelLinear
+            linear_qkvwb = TELayerNormColumnParallelLinear
 
         return ModuleSpec(
             module=TransformerLayer,
@@ -166,8 +166,9 @@ def get_gpt_layer_with_transformer_engine_spec(
                 input_layernorm=input_layernorm,
                 self_attention=ModuleSpec(
                     module=PaTHAttention,
+                    params={"impl": path_attention},
                     submodules=PaTHAttentionSubmodules(
-                        linear_qkv=linear_qkv,
+                        linear_qkvwb=linear_qkvwb,
                         core_attention=ParallelPaTHAttention,
                         linear_proj=TERowParallelLinear,
                         q_layernorm=(
@@ -322,8 +323,9 @@ def get_gpt_layer_local_spec(
                 input_layernorm=LNImpl,
                 self_attention=ModuleSpec(
                     module=PaTHAttention,
+                    params={"impl": path_attention},
                     submodules=PaTHAttentionSubmodules(
-                        linear_qkv=ColumnParallelLinear,
+                        linear_qkvwb=ColumnParallelLinear,
                         core_attention=ParallelPaTHAttention,
                         linear_proj=RowParallelLinear,
                         q_layernorm=(

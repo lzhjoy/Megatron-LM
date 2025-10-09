@@ -163,8 +163,11 @@ class TransformerConfig(ModelParallelConfig):
     emb_deviation_type: Optional[str] = None
     """The embedding deviation mitigation strategy. Support: loss, square_loss"""
 
-    path_attention: Optional[Literal["full"]] = None
+    path_attention: Optional[Literal["full", "full_rope"]] = None
     """Whether to use PaTH attention. http://arxiv.org/abs/2505.16381"""
+
+    shortconv_kernel_size: int = 3
+    """Kernel size for short convolution in PaTH attention."""
 
     ####################
     # initialization

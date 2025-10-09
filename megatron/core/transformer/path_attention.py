@@ -5,12 +5,11 @@
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional, Tuple, Union
+from typing import Literal, Optional, Tuple, Union
 
 import torch
-from fla.layers.utils import pad_input, unpad_input
+from einops import rearrange
 from fla.modules import ShortConvolution
 from fla.modules.l2norm import l2_norm
 from fla.ops.path_attn.parallel import parallel_path_attn
@@ -19,7 +18,6 @@ from megatron.core.inference.contexts import BaseInferenceContext
 from megatron.core.packed_seq_params import PackedSeqParams
 from megatron.core.models.common.embeddings.rope_utils import (
     apply_rotary_pos_emb,
-    apply_rotary_pos_emb_with_cos_sin,
 )
 from megatron.core.process_groups_config import ModelCommProcessGroups
 from megatron.core.transformer.attention import Attention
@@ -46,7 +44,7 @@ class PaTHAttentionSubmodules:
     Configuration class for specifying the submodules of a self-attention.
     """
 
-    linear_qkv: Union[ModuleSpec, type] = None
+    linear_qkvwb: Union[ModuleSpec, type] = None
     core_attention: Union[ModuleSpec, type] = None
     linear_proj: Union[ModuleSpec, type] = None
     q_layernorm: Union[ModuleSpec, type] = None
@@ -77,10 +75,11 @@ class ParallelPaTHAttention(MegatronModule):
         value: Tensor,
         weight: Tensor,
         beta: Tensor,
-        cu_seqlens: Tensor,
         gate: Optional[Tensor] = None,
+        packed_seq_params = None,
     ):
         """Forward."""
+        cu_seqlens = packed_seq_params.cu_seqlens_kv if packed_seq_params is not None else None
         return parallel_path_attn(
             q=query,
             k=key,
@@ -102,6 +101,7 @@ class PaTHAttention(Attention):
         attn_mask_type=AttnMaskType.padding,
         cp_comm_type: str = None,
         model_comm_pgs: ModelCommProcessGroups = None,
+        impl: Literal["full", "full_rope"] = "full",
     ):
         super().__init__(
             config=config,
@@ -114,8 +114,8 @@ class PaTHAttention(Attention):
         )
 
         size_qkvwb = self.query_projection_size + 3 * self.kv_projection_size + self.config.num_query_groups
-        self.linear_qkv = build_module(
-            submodules.linear_qkv,
+        self.linear_qkvwb = build_module(
+            submodules.linear_qkvwb,
             self.config.hidden_size,
             size_qkvwb,
             config=self.config,
@@ -153,9 +153,13 @@ class PaTHAttention(Attention):
                 hidden_size=self.kv_projection_size,
                 kernel_size=config.shortconv_kernel_size,
                 bias=False,
-                activation='silu')
+                activation='silu',
+                backend='cuda',
+            )
         else:
             self.w_conv1d = None
+
+        self.path_rope = (impl == "full_rope")
 
     def get_query_key_value_tensors(self,
                                     hidden_states,
@@ -163,10 +167,10 @@ class PaTHAttention(Attention):
         """
         Derives `query`, `key`, `value`, `weight` and `beta` tensors from `hidden_states`.
         """
-        # Attention heads [sq, b, h] --> [sq, b, ng * (np/ng + 3) * hn + 1)]
-        mixed_qkvwb, _ = self.linear_qkv(hidden_states)
+        # Attention heads [b, sq, h] --> [b, sq, ng * (np/ng + 3) * hn + 1)]
+        mixed_qkvwb, _ = self.linear_qkvwb(hidden_states.transpose(0, 1))
 
-        # [sq, b, hp] --> [sq, b, ng, (np/ng + 3) * hn + 1]
+        # [b, sq, hp] --> [b, sq, ng, (np/ng + 3) * hn + 1]
         new_tensor_shape = mixed_qkvwb.size()[:-1] + (
             self.num_query_groups_per_partition,
             ((self.num_attention_heads_per_partition //
@@ -187,25 +191,25 @@ class PaTHAttention(Attention):
 
         if SplitAlongDim is not None:
 
-            # [sq, b, ng, (np/ng + 3) * hn + 1]
-            # --> [sq, b, ng, np/ng * hn], [sq, b, ng, hn], [sq, b, ng, hn], [sq, b, ng, hn], [sq, b, ng, 1]
+            # [b, sq, ng, (np/ng + 3) * hn + 1]
+            # --> [b, sq, ng, np/ng * hn], [b, sq, ng, hn], [b, sq, ng, hn], [b, sq, ng, hn], [b, sq, ng, 1]
             (query, key, value, weight,
              beta) = SplitAlongDim(mixed_qkvwb, 3, split_arg_list)
         else:
 
-            # [sq, b, ng, (np/ng + 3) * hn + 1]
-            # --> [sq, b, ng, np/ng * hn], [sq, b, ng, hn], [sq, b, ng, hn], [sq, b, ng, hn], [sq, b, ng, 1]
+            # [b, sq, ng, (np/ng + 3) * hn + 1]
+            # --> [b, sq, ng, np/ng * hn], [b, sq, ng, hn], [b, sq, ng, hn], [b, b, sq, ng, hn], [b, sq, ng, 1]
             (query, key, value, weight, beta) = torch.split(mixed_qkvwb,
                                                             split_arg_list,
                                                             dim=3)
 
-        # [sq, b, ng, 1] --> [sq, b, ng]
+        # [b, sq, ng, 1] --> [b, sq, ng]
         beta = beta.squeeze(3)
 
         # allowing negative eigenvalues
         beta = beta.float().sigmoid() * 2
 
-        # [sq, b, ng, np/ng * hn] -> [sq, b, np, hn]
+        # [b, sq, ng, np/ng * hn] -> [b, sq, np, hn]
         query = query.reshape(query.size(0), query.size(1), -1,
                               self.hidden_size_per_attention_head)
 
@@ -214,8 +218,6 @@ class PaTHAttention(Attention):
 
         if self.k_layernorm is not None:
             key = self.k_layernorm(key)
-
-        weight = l2_norm(weight, output_dtype=torch.float32)
 
         if self.config.test_mode:
             self.run_realtime_tests()
@@ -312,25 +314,29 @@ class PaTHAttention(Attention):
             hidden_states)
         if self.w_conv1d:
             cu_seqlens = packed_seq_params.cu_seqlens_kv if packed_seq_params is not None else None
-            weight, _ = self.w_conv1d(weight,
-                                 cache=None,
-                                 output_final_state=False,
-                                 cu_seqlens=cu_seqlens)
+            weight, _ = self.w_conv1d(
+                rearrange(weight, 'b s n h -> b s (n h)'),
+                cache=None,
+                output_final_state=False,
+                cu_seqlens=cu_seqlens,
+            )
+            weight = rearrange(weight, 'b s (n h) -> b s n h', n=self.num_attention_heads_per_partition)
+        weight = l2_norm(weight, output_dtype=torch.float32)
 
         # Training
         if attention_mask is not None:
             raise ValueError("attention_mask is not supported in training")
 
-        if packed_seq_params is not None:
-            query = query.squeeze(1)
-            key = key.squeeze(1)
-            value = value.squeeze(1)
+        # if packed_seq_params is not None:
+        #     query = query.squeeze(1)
+        #     key = key.squeeze(1)
+        #     value = value.squeeze(1)
 
         # ================================================
         # relative positional embedding (rotary embedding)
         # ================================================
 
-        if rotary_pos_emb is not None and not self.config.flash_decode:
+        if self.path_rope and rotary_pos_emb is not None and not self.config.flash_decode:
             q_pos_emb, k_pos_emb = rotary_pos_emb
 
             if packed_seq_params is not None:
@@ -346,19 +352,13 @@ class PaTHAttention(Attention):
                 cu_seqlens_q = cu_seqlens_kv = None
 
             if q_pos_emb is not None:
-                # TODO VIJAY: simplify
-                if inference_context is None or inference_context.is_static_batching():
-                    query = apply_rotary_pos_emb(
-                        query,
-                        q_pos_emb,
-                        config=self.config,
-                        cu_seqlens=cu_seqlens_q,
-                        cp_group=self.model_comm_pgs.cp,
-                    )
-                else:
-                    query = inference_context.apply_rotary_emb_query(
-                        query, q_pos_emb, self.config, cu_seqlens_q, self.model_comm_pgs.cp
-                    )
+                query = apply_rotary_pos_emb(
+                    query,
+                    q_pos_emb,
+                    config=self.config,
+                    cu_seqlens=cu_seqlens_q,
+                    cp_group=self.model_comm_pgs.cp,
+                )
             if k_pos_emb is not None:
                 key = apply_rotary_pos_emb(
                     key,
@@ -371,12 +371,12 @@ class PaTHAttention(Attention):
             # TODO, can apply positional embedding to value_layer so it has
             # absolute positional embedding.
             # otherwise, only relative positional embedding takes effect
+            # VO RoPE: https://kexue.fm/archives/10862
             # value_layer = apply_rotary_pos_emb(value_layer, k_pos_emb)
 
         # ==================================
         # core attention computation
         # ==================================
-
         if self.checkpoint_core_attention and self.training:
             core_attn_out = self._checkpointed_attention_forward(
                 query,
@@ -404,9 +404,9 @@ class PaTHAttention(Attention):
             core_attn_out = core_attn_out.reshape(core_attn_out.size(0), 1, -1)
 
         # =================
-        # Output. [sq, b, h]
+        # Output. [b, sq, ng, hn] -> [sq, b, h]
         # =================
-        core_attn_out = core_attn_out.reshape(core_attn_out.size(0), core_attn_out.size(1), -1)
+        core_attn_out = rearrange(core_attn_out, 'b s n h -> s b (n h)')
         output, bias = self.linear_proj(core_attn_out)
 
         return output, bias

@@ -141,7 +141,7 @@ def validate_model_config_args_from_heterogeneous_config(args):
     )
 
     n_kv_heads_in_group = [
-        config["attention"]["n_heads_in_group"] for config in hf_config_dict.block_configs 
+        config["attention"]["n_heads_in_group"] for config in hf_config_dict.block_configs
         if config["attention"]["n_heads_in_group"] is not None
     ]
     assert all(num == n_kv_heads_in_group[0] for num in n_kv_heads_in_group), "num query head must be consistent across all layers"
@@ -291,7 +291,7 @@ def validate_args(args, defaults={}):
                 LocalCheckpointManager
         except ModuleNotFoundError as e:
             raise RuntimeError('nvidia_resiliency_ext is required for local checkpointing') from e
-        
+
     # validate model config args from heterogeneous config (if provided).
     validate_model_config_args_from_heterogeneous_config(args)
 
@@ -454,7 +454,7 @@ def validate_args(args, defaults={}):
                 num_layers = args.num_layers
             else:
                 num_layers = args.decoder_num_layers
-            
+
             if args.account_for_embedding_in_pipeline_split:
                 num_layers += 1
 
@@ -729,7 +729,7 @@ def validate_args(args, defaults={}):
     else:
         assert args.start_weight_decay is not None
         assert args.end_weight_decay is not None
- 
+
     # Attention output gate does not support multi latent attention for now
     if args.attn_output_gate is not None:
         assert not args.multi_latent_attention
@@ -1022,7 +1022,7 @@ def core_transformer_config_from_args(args, config_class=None):
 
     if args.multi_latent_attention:
         config_class = MLATransformerConfig
-    
+
     if args.heterogeneous_layers_config_path is not None:
         assert not args.multi_latent_attention, "Multi latent attention with heterogeneous layers is not supported."
         from megatron.core.transformer.heterogeneous.heterogeneous_config import HeterogeneousTransformerConfig
@@ -1377,15 +1377,17 @@ def _add_network_size_args(parser):
                        help='Whether to use token time-shift before RoPE and core attention. kv_shifting: http://arxiv.org/abs/2411.19574 ')
     group.add_argument('--attn-output-gate', type=str, default=None, choices=['full', 'lora'],
                        help='Whether to use gated attention output.')
-    group.add_argument('--path-attention', type=str, default=None, choices=['full'],
+    group.add_argument('--path-attention', type=str, default=None, choices=['full', 'full_rope'],
                        help='Whether to use PaTH attention. http://arxiv.org/abs/2505.16381')
+    group.add_argument('--shortconv-kernel-size', type=int, default=3,
+                       help='Kernel size for short convolution in PaTH attention.')
     group.add_argument('--emb-deviation-loss-coeff', type=float, default=0,
                        help='Scaling coefficient for the embedding devication loss. Default 0 means disabled.')
     group.add_argument('--emb-deviation-type', type=str, default=None, choices=['loss', 'square_loss', 'mean'],
                        help='The embedding deviation mitigation strategy.')
-    group.add_argument('--window-size', type=int, nargs=2, default=None,  
-                       help='Window size for sliding window attention. '  
-                       'Specify as two integers: [forward_window, backward_window]. '  
+    group.add_argument('--window-size', type=int, nargs=2, default=None,
+                       help='Window size for sliding window attention. '
+                       'Specify as two integers: [forward_window, backward_window]. '
                        'Use -1 for infinite window size. Example: --window-size 2048 0')
     return parser
 
@@ -2685,9 +2687,9 @@ def _add_mla_args(parser):
 
 def _add_heterogeneous_args(parser):
     """
-    Heterogeneous models refer to transformer architectures where individual layers can differ 
+    Heterogeneous models refer to transformer architectures where individual layers can differ
     in configuration. Specifically:
-        - Attention or MLP layers can be replaced with either a linear layer or a no-op 
+        - Attention or MLP layers can be replaced with either a linear layer or a no-op
         - MLP intermediate dimensions can vary between layers
     We use the format of the HuggingFace config files in llama nemotron models to define the architecture.
     For example, https://huggingface.co/nvidia/Llama-3_3-Nemotron-Super-49B-v1/resolve/main/config.json
