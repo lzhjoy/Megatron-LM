@@ -55,7 +55,6 @@ def _get_param_groups(
     decoupled_min_lr: Optional[float],
     muon_matched_adamw_rms: Optional[float],
     use_muon: bool = False,
-    freeze_non_mamba: bool = False,
 ) -> List[Dict]:
     """Create parameter groups for optimizer.
 
@@ -250,7 +249,6 @@ def _get_param_groups_and_buffers(
     lr_mult: float,
     filter_fn: Callable,
     buffer_name: str,
-    freeze_non_mamba: bool,
 ) -> Tuple[List[Dict], Dict[int, List[_ParamAndGradBuffer]]]:
     """Returns parameter groups and buffer for optimizer.
 
@@ -284,7 +282,6 @@ def _get_param_groups_and_buffers(
         decoupled_min_lr=config.decoupled_min_lr,
         muon_matched_adamw_rms=config.muon_matched_adamw_rms,
         use_muon = config.optimizer == 'muon',
-        freeze_non_mamba = freeze_non_mamba,
     )
     param_groups = list(filter(filter_fn, param_groups))
     buffers = {}
@@ -495,9 +492,7 @@ def get_megatron_optimizer(
     scale_lr_cond: Optional[Callable] = None,
     lr_mult: float = 1.0,
     use_gloo_process_groups: bool = True,
-    freeze_non_mamba: bool = False,
 ) -> MegatronOptimizer:
-    print(f"[DEBUG] freeze_non_mamba: {freeze_non_mamba}")
     """Retrieve the Megatron optimizer for model chunks.
 
     We use separate optimizers for expert parameters and non-expert parameters.
@@ -556,7 +551,6 @@ def get_megatron_optimizer(
                 lr_mult=lr_mult,
                 filter_fn=lambda g: True,
                 buffer_name='buffers',
-                freeze_non_mamba=freeze_non_mamba,
             )
             optimizers.append(
                 _get_megatron_optimizer_based_on_param_groups(
@@ -591,7 +585,6 @@ def get_megatron_optimizer(
             lr_mult=lr_mult,
             filter_fn=lambda g: not g['is_expert_parallel'],
             buffer_name='buffers',
-            freeze_non_mamba=freeze_non_mamba,
         )
         for model_chunk in dense_model_chunks:
             model_chunk.overlap_param_gather_with_optimizer_step = (
@@ -631,7 +624,6 @@ def get_megatron_optimizer(
         lr_mult=lr_mult,
         filter_fn=lambda g: g['is_expert_parallel'],
         buffer_name='expert_parallel_buffers',
-        freeze_non_mamba=freeze_non_mamba,
     )
     if len(moe_param_groups) > 0:
         model_parallel_rank = torch.distributed.get_rank(
