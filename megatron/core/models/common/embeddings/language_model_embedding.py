@@ -7,6 +7,12 @@ from torch import Tensor
 
 from megatron.core import tensor_parallel
 from megatron.core import parallel_state
+from megatron.core.tensor_parallel.utils import VocabUtility
+from megatron.core.parallel_state import (
+    get_tensor_model_parallel_group,
+    get_tensor_model_parallel_rank,
+    get_tensor_model_parallel_world_size,
+)
 from megatron.core.transformer.module import MegatronModule
 from megatron.core.transformer.transformer_config import TransformerConfig
 from megatron.core.transformer.utils import save_to_hidden_states_tracker
@@ -81,6 +87,7 @@ class LanguageModelEmbedding(MegatronModule):
         position_embedding_type: Literal['learned_absolute', 'rope', 'none'] = 'learned_absolute',
         num_tokentypes: int = 0,
         scatter_to_sequence_parallel: bool = True,
+        dropout_replacement_vocab_size: int = 151643,
     ):
         super().__init__(config=config)
 
@@ -108,6 +115,41 @@ class LanguageModelEmbedding(MegatronModule):
             reduce_scatter_embeddings=self.reduce_scatter_embeddings,
             config=self.config,
         )
+
+        with torch.no_grad():
+            # 1. 获取当前 GPU 上的词向量分片
+            # self.word_embeddings.weight 的形状是 [local_vocab_size, hidden_size]
+            local_embedding_shard = self.word_embeddings.weight
+
+            get_vocab_range = VocabUtility.vocab_range_from_per_partition_vocab_size
+            partition_vocab_size = local_embedding_shard.size()[0]
+            rank = get_tensor_model_parallel_rank()
+            world_size = get_tensor_model_parallel_world_size()
+            start_idx, end_idx = get_vocab_range(partition_vocab_size, rank, world_size)
+            # print("start_idx: ", start_idx)
+            # print("end_idx: ", end_idx)
+
+            # 只关心 0 ~ dropout_replacement_vocab_size-1
+            effective_end_idx = min(end_idx, dropout_replacement_vocab_size)
+
+            local_sum_vector = torch.zeros(
+                self.config.hidden_size,
+                dtype=self.config.params_dtype,
+                device=local_embedding_shard.device,
+            )
+
+            if start_idx < effective_end_idx:                # 该分片与需求区间有交集
+                local_slice_start = 0                        # 在本 shard 内起始位置
+                local_slice_end   = effective_end_idx - start_idx
+                local_sum_vector  = local_embedding_shard[local_slice_start:local_slice_end].sum(dim=0)
+
+            torch.distributed.all_reduce(
+                local_sum_vector,
+                group=get_tensor_model_parallel_group()
+            )
+
+            avg_embedding = local_sum_vector / dropout_replacement_vocab_size
+            self.avg_embedding_for_dropout = avg_embedding
 
         # Position embedding (serial).
         if self.add_position_embedding:
@@ -193,14 +235,22 @@ class LanguageModelEmbedding(MegatronModule):
             dropout_mask = per_token_rand < dynamic_probs_per_sequence
 
             # 只有当一个 token 既属于目标数据集，又被选中 dropout 时，才最终被置零
-            final_mask = target_dataset_mask & dropout_mask
+            final_mask = (target_dataset_mask & dropout_mask).bool()
+
+            replacement_embedding = self.avg_embedding_for_dropout.to(
+                device=word_embeddings.device
+            ).view(1, 1, -1)
 
             # 扩展掩码维度以匹配 embedding 张量
             # final_mask: [b, s] -> [b, s, 1]
-            final_mask = final_mask.unsqueeze(-1)
+            final_mask_expanded = final_mask.unsqueeze(-1)
             
             # 在原位(in-place)将选中的词向量置零
-            word_embeddings = word_embeddings.masked_fill(final_mask, 0.0)
+            word_embeddings = torch.where(
+                final_mask_expanded, 
+                replacement_embedding, 
+                word_embeddings
+            )
 
 
         if self.add_position_embedding:
