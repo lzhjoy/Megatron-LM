@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from typing import NoReturn, Optional, Tuple, Union
 
 import torch
+from torch import nn
+import torch.nn.functional as F
 from torch import Tensor
 
 from megatron.core import tensor_parallel
@@ -120,6 +122,23 @@ class CrossAttentionSubmodules:
     linear_proj: Union[ModuleSpec, type] = None
 
 
+@torch.compile
+def kv_shifting_attention_convolution(U: torch.Tensor, K: torch.Tensor):
+    """
+    Custom convolution for KV Shifting Attention.
+
+    U: hidden states, [sq, b, np, hn].
+    K: learnables.
+    """
+    _, window_size = K.shape  # window_size = 2 * actual window size
+    U_padded = F.pad(U, (0, 0, 0, 0, 0, 0, window_size - 1, 0))  # [sq+w-1, b, np, hn]
+    U_unfolded = U_padded.unfold(0, window_size, 1)  # [seq+w-1, b, np, hn, w]
+    K_expanded = K.unsqueeze(0).unsqueeze(0).unsqueeze(-2)  # (1, 1, np, 1, w)
+    V_unfolded = U_unfolded * K_expanded  # [sq, b, np, hn, w]
+    V = V_unfolded.sum(dim=-1)
+    return V
+
+
 class Attention(MegatronModule, ABC):
     """Attention layer abstract class.
 
@@ -171,6 +190,9 @@ class Attention(MegatronModule, ABC):
         # To support both CUDA Graphs and key value with different hidden size
         self.key_hidden_size = self.hidden_size_per_attention_head
         self.val_hidden_size = self.hidden_size_per_attention_head
+
+        # Attention output gate
+        self.use_attn_output_gate = config.attn_output_gate is not None
 
         self.core_attention = build_module(
             submodules.core_attention,
@@ -439,6 +461,12 @@ class Attention(MegatronModule, ABC):
         This method needs to be implemented based on whether the derived class
         is "self-attn" or "cross-attn".
         """
+
+    def apply_attn_output_gate(self, core_attn_out, gate):
+        """
+        Apply gate to core attention output.
+        """
+        raise NotImplementedError("Only GatedSelfAttention supports apply_attn_output_gate.")
 
     def flash_decode(
         self,
@@ -717,6 +745,10 @@ class Attention(MegatronModule, ABC):
                 self.q_layernorm is None or isinstance(self.q_layernorm, IdentityOp),
                 self.k_layernorm is None or isinstance(self.k_layernorm, IdentityOp),
             ]
+        ) or (
+            self.attention_type == "self" and self.use_attn_output_gate
+        ) or (
+            self.k_shifting is not None and self.v_shifting is not None
         )
         # Check if fused_single_qkv_rope is requested but either unavailable or not
         # supported for the current use case.
@@ -730,7 +762,9 @@ class Attention(MegatronModule, ABC):
         )
         attn_mask_type = self.attn_mask_type
         block_table = None
-        if split_qkv:
+        if self.attention_type == "self" and self.use_attn_output_gate:
+            query, key, value, gate = qkv_output
+        elif split_qkv:
             query, key, value = qkv_output
         else:
             mixed_qkv, qkv_split_arg_list = qkv_output
@@ -915,6 +949,8 @@ class Attention(MegatronModule, ABC):
         # =================
         # Output. [sq, b, h]
         # =================
+        if self.attention_type == "self" and self.use_attn_output_gate:
+            core_attn_out = self.apply_attn_output_gate(core_attn_out, gate)
 
         nvtx_range_push(suffix="linear_proj")
         output, bias = self.linear_proj(core_attn_out)
@@ -986,6 +1022,20 @@ class SelfAttention(Attention):
             )
         else:
             self.k_layernorm = None
+
+        self.attn_token_shift = config.attn_token_shift
+        if config.attn_token_shift == "kv_shifting":
+            K = torch.rand(self.config.num_query_groups ,1)
+            V = torch.rand(self.config.num_query_groups ,1)
+            self.k_shifting = nn.Parameter(torch.stack([K, 1-K],dim=1).reshape(-1, 1))
+            self.v_shifting = nn.Parameter(torch.stack([V, 1-V], dim=1).reshape(-1, 1))
+        elif config.attn_token_shift == "kv_shifting_half":
+            K = torch.rand(self.config.num_query_groups ,1)
+            V = torch.rand(self.config.num_query_groups ,1)
+            self.k_shifting = nn.Parameter(K,dim=1)
+            self.v_shifting = nn.Parameter(V, dim=1)
+        else:
+            self.k_shifting, self.v_shifting = None, None
 
     def run_realtime_tests(self):
         """Performs a consistency check.
@@ -1109,6 +1159,23 @@ class SelfAttention(Attention):
 
         if self.k_layernorm is not None:
             key = self.k_layernorm(key)
+
+        if self.k_shifting is not None:
+            st = get_tensor_model_parallel_rank() * self.num_query_groups_per_partition
+            ed = (get_tensor_model_parallel_rank() + 1) * self.num_query_groups_per_partition
+            if self.attn_token_shift == "kv_shifting_one":
+                key = kv_shifting_attention_convolution(key, self.k_shifting[st:ed])
+            else:
+                # since there's two learnable parameters
+                key = kv_shifting_attention_convolution(key, self.k_shifting[st*2:ed*2])
+
+        if self.v_shifting is not None:
+            st = get_tensor_model_parallel_rank() * self.num_query_groups_per_partition
+            ed = (get_tensor_model_parallel_rank() + 1) * self.num_query_groups_per_partition
+            if self.attn_token_shift == "kv_shifting_one":
+                value = kv_shifting_attention_convolution(value, self.v_shifting[st:ed])
+            else:
+                value = kv_shifting_attention_convolution(value, self.v_shifting[st*2:ed*2])
 
         if self.config.test_mode:
             self.run_realtime_tests()

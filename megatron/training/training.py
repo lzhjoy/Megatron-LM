@@ -89,6 +89,7 @@ from megatron.legacy.data.data_samplers import build_pretraining_data_loader
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.transformer.moe import upcycling_utils
 from megatron.core.transformer.moe.moe_utils import track_moe_metrics
+from megatron.core.transformer.utils import track_gpt_metrics
 from megatron.core.transformer.multi_token_prediction import MTPLossLoggingHelper
 from megatron.core.parallel_state import (
     destroy_global_memory_buffer,
@@ -119,6 +120,7 @@ from .utils import (
     unwrap_model,
     update_use_dist_ckpt,
     to_empty_if_meta_device,
+    get_peak_flops,
 )
 from .global_vars import (
     destroy_global_vars,
@@ -1082,6 +1084,7 @@ def setup_model_and_optimizer(
 
     model = get_model(model_provider_func, model_type)
     unwrapped_model = unwrap_model(model)
+    print_rank_0(unwrapped_model)
 
     one_logger and one_logger.log_metrics({"app_build_optimzer_start_time": one_logger_utils.get_timestamp_in_ms()})
     kwargs = {}
@@ -1389,7 +1392,13 @@ def training_log(
         if advanced_iters_key not in total_loss_dict:
             total_loss_dict[advanced_iters_key] = 0
     # Skipped iterations.
-    total_loss_dict[skipped_iters_key] = total_loss_dict.get(skipped_iters_key, 0) + skipped_iter
+    total_loss_dict[skipped_iters_key] = total_loss_dict.get(
+        skipped_iters_key, 0) + skipped_iter
+    # max_vio
+    if 'max_vio' in loss_dict:
+        max_vio = loss_dict.pop('max_vio')
+    else:
+        max_vio = None
     # Update losses and set nan iterations
     got_nan = False
     for key in loss_dict:
@@ -1454,6 +1463,8 @@ def training_log(
     learning_rate = reduce_max_stat_across_model_parallel_group(learning_rate)
     # Tensorboard values.
     if writer and (iteration % args.tensorboard_log_interval == 0):
+        if max_vio is not None:
+            writer.add_scalar('max_vio', max_vio, iteration)
         if wandb_writer:
             wandb_writer.log({'samples vs steps': args.consumed_train_samples}, iteration)
         writer.add_scalar('learning-rate', learning_rate, iteration)
@@ -1526,6 +1537,16 @@ def training_log(
                 "mem-max-allocated-bytes", mem_stats["allocated_bytes.all.peak"], iteration
             )
             writer.add_scalar("mem-allocated-count", mem_stats["allocation.all.current"], iteration)
+    if len(args.log_layer_hidden_states) > 0:
+        # average across microbatches internally
+        track_gpt_metrics(
+            iteration=iteration,
+            writer=writer,
+            wandb_writer=wandb_writer,
+            per_layer_logging=True,
+            force_initialize=True,
+            num_layers=args.num_layers,
+        )
     if args.num_experts is not None:
         moe_loss_scale = 1 / get_num_microbatches()
         track_names = []
@@ -1588,7 +1609,8 @@ def training_log(
             elapsed_time_per_iteration * 1000.0
         )
         if args.log_throughput:
-            log_string += f' throughput per GPU (TFLOP/s/GPU): {throughput:.1f} |'
+            mfu = throughput / get_peak_flops() * 1e12 * 100
+            log_string += f' throughput per GPU (TFLOP/s/GPU): {throughput:.1f} | MFU {mfu:.2f}% |'
             if args.log_timers_to_tensorboard:
                 if writer:
                     writer.add_scalar('throughput', throughput, iteration)
@@ -1635,6 +1657,11 @@ def training_log(
             total_loss_dict[skipped_iters_key]
         )
         log_string += ' number of nan iterations: {:3d} |'.format(total_loss_dict[nan_iters_key])
+        remaining_time = timedelta(seconds=elapsed_time_per_iteration * (args.train_iters - iteration))
+        log_string += ' remaining time: {} | finish at {}'.format(
+            str(remaining_time),
+            (datetime.now() + remaining_time).strftime('%Y-%m-%d %H:%M:%S')
+        )
         total_loss_dict[advanced_iters_key] = 0
         total_loss_dict[skipped_iters_key] = 0
         total_loss_dict[nan_iters_key] = 0
@@ -1882,6 +1909,13 @@ def checkpoint_and_decide_exit(
             non_persistent_ckpt=True,
             train_data_iterator=train_data_iterator,
         )
+        saved_checkpoint = True
+    
+    elif args.save and iteration == 1 and not args.no_save_step_one:
+        save_checkpoint_and_time(iteration, model, optimizer,
+                                 opt_param_scheduler,
+                                 num_floating_point_operations_so_far,
+                                 checkpointing_context, train_data_iterator=train_data_iterator)
         saved_checkpoint = True
 
     # Exit based on duration.
@@ -2274,6 +2308,16 @@ def train(
                     model, optimizer, iteration, ref_state_dict, buffered_rollouts
                 )
                 buffered_rollouts = train_data_iterator
+
+        if iteration % args.increase_log_level_interval == 0:
+            print_rank_0(f'Iter {iteration} increase timing-log-level to 2.')
+            args.init_timing_log_level = args.timing_log_level
+            args.timing_log_level = 2
+            timers.set_log_level(2)
+        if iteration % args.increase_log_level_interval == args.increase_log_level_iters:
+            print_rank_0(f'Iter {iteration} reset timing-log-level.')
+            args.timing_log_level = args.init_timing_log_level
+            timers.set_log_level(args.init_timing_log_level)
 
         ft_integration.on_training_step_start()
         (

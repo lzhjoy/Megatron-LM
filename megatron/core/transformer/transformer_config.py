@@ -6,7 +6,6 @@ from typing import Callable, List, Literal, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
-
 from megatron.core.enums import Fp8Recipe
 from megatron.core.quantization.quant_config import RecipeConfig
 from megatron.core.transformer.enums import AttnBackend
@@ -42,6 +41,9 @@ class TransformerConfig(ModelParallelConfig):
     # model architecture
     ####################
 
+    log_layer_hidden_states: Optional[List[str]] = None
+    """Enable mean and std logging of hidden states in each transformer layer."""
+
     num_layers: int = 0
     """Number of transformer layers in a transformer block."""
 
@@ -67,8 +69,8 @@ class TransformerConfig(ModelParallelConfig):
     - list: e.g., [['embedding', 'decoder'], ['decoder', 'decoder', 'decoder', 'loss']].
     - PipelineParallelLayerLayout: a PipelineParallelLayerLayout object.
     If given either a string or a list, it will be transferred into a PipelineParallelLayerLayout
-    in post init. Let i = a * pp_size + b, then layout[i] gives a list of the layers 
-    in the a-th vpp stage and the b-th pp stage, i.e., vpp(0)pp(0), vpp(0)pp(1), ..., 
+    in post init. Let i = a * pp_size + b, then layout[i] gives a list of the layers
+    in the a-th vpp stage and the b-th pp stage, i.e., vpp(0)pp(0), vpp(0)pp(1), ...,
     vpp(i)pp(j), vpp(i)pp(j+1), ..., vpp(-1)pp(-2), vpp(-1)pp(-1).
     In the inner lists of layers, 'embedding' or 'E' denotes the embedding layer, 'loss' or 'L'
     denotes the loss function, and 'decoder' or 't' denotes the transformer decoder layer.
@@ -109,8 +111,8 @@ class TransformerConfig(ModelParallelConfig):
     """Softmax scale for attention scaling."""
 
     softmax_type: Literal['vanilla', 'off-by-one', 'learnable'] = 'vanilla'
-    """Applies modified softmax from https://www.evanmiller.org/attention-is-off-by-one.html. 
-       Supports both TE FusedAttention and local unfused attention. Supports both a fixed offset and 
+    """Applies modified softmax from https://www.evanmiller.org/attention-is-off-by-one.html.
+       Supports both TE FusedAttention and local unfused attention. Supports both a fixed offset and
        and learnable offset."""
 
     num_query_groups: Optional[int] = None
@@ -162,7 +164,7 @@ class TransformerConfig(ModelParallelConfig):
     The stored input is casted back to the original precision before backprop compuatation."""
 
     glu_linear_offset: float = 0.0
-    """Offset term in the GLU activation function: activation_func(x[0]) * (x[1] + offset). Only 
+    """Offset term in the GLU activation function: activation_func(x[0]) * (x[1] + offset). Only
     used when gated_linear_unit is True"""
 
     activation_func_clamp_value: Optional[float] = None
@@ -192,6 +194,9 @@ class TransformerConfig(ModelParallelConfig):
     qk_layernorm: bool = False
     """Whether to apply `normalization` type of normalization to the query and key embeddings."""
 
+    qk_l2_norm: bool = False
+    """Whether to apply L2 normalization to the query and key embeddings."""
+
     test_mode: bool = False
     """Whether to run real-time tests."""
 
@@ -211,6 +216,27 @@ class TransformerConfig(ModelParallelConfig):
 
     moe_deepep_num_sms: int = 20
     """Number of SMs to use for DeepEP."""
+
+    ffn_token_shift: Optional[Literal['cat', 'subtraction', 'addition']] = None
+    """Whether to use token time-shift before FFN/MoE."""
+
+    attn_token_shift: Optional[Literal['kv_shifting', 'kv_shifting_one']] = None
+    """Whether to use token time-shift before RoPE and core attention."""
+
+    attn_output_gate: Optional[Literal['full', 'lora']] = None
+    """Whether to use gated attention output"""
+
+    emb_deviation_loss_coeff: float = 0
+    """Scaling coefficient for the embedding devication loss."""
+
+    emb_deviation_type: Optional[str] = None
+    """The embedding deviation mitigation strategy. Support: loss, square_loss"""
+
+    path_attention: Optional[Literal["full", "full_rope"]] = None
+    """Whether to use PaTH attention. http://arxiv.org/abs/2505.16381"""
+
+    shortconv_kernel_size: int = 3
+    """Kernel size for short convolution in PaTH attention."""
 
     ####################
     # initialization
@@ -232,13 +258,13 @@ class TransformerConfig(ModelParallelConfig):
 
     embedding_init_method: Optional[Callable] = None
     """
-    Method to initialize weights of the embedding layer. If None, will be set as described 
+    Method to initialize weights of the embedding layer. If None, will be set as described
     in init_method above.
     """
 
     embedding_init_method_std: Optional[float] = None
     """
-    Standard deviation of the zero mean normal for the default initialization method for the 
+    Standard deviation of the zero mean normal for the default initialization method for the
     embedding layer. If None, will be set to init_method_std.
     """
 
@@ -408,7 +434,7 @@ class TransformerConfig(ModelParallelConfig):
     # fp4 related
     ####################
     fp4: Optional[str] = None
-    """If set, enables the use of FP4 precision through Transformer Engine. Currently only 
+    """If set, enables the use of FP4 precision through Transformer Engine. Currently only
     supports 'nvfp4' which uses NVFP4BlockScaling recipe (requires TE >= 2.7.0.dev0)."""
 
     fp4_recipe: Optional[str] = "nvfp4"
@@ -494,7 +520,7 @@ class TransformerConfig(ModelParallelConfig):
     """Number of selected groups for group-limited routing."""
 
     moe_router_pre_softmax: bool = False
-    """Enable pre-softmax(pre-sigmoid) routing for MoE, which means softmax is before the 
+    """Enable pre-softmax(pre-sigmoid) routing for MoE, which means softmax is before the
     top-k selection.
     By default, softmax is done after top-k."""
 
@@ -522,8 +548,12 @@ class TransformerConfig(ModelParallelConfig):
     The default value 1e-3 is same as that used in DeepSeekV3."""
 
     moe_router_force_load_balancing: bool = False
-    """[Experimental] Force load balancing with random logits for MoE router, supports naive topk 
+    """[Experimental] Force load balancing with random logits for MoE router, supports naive topk
     and group-limited topk. This is an experimental feature and only for benchmark."""
+
+    moe_router_bias_update_method: Literal["sign", "rms_norm"] = "sign"
+    """The expert bias update method. https://spaces.ac.cn/archives/10815
+    The default value sign is same as that used in DeepSeekV3."""
 
     moe_grouped_gemm: bool = False
     """When there are multiple experts per rank, compress multiple local (potentially small) gemms
@@ -692,6 +722,9 @@ class TransformerConfig(ModelParallelConfig):
     mamba_state_dim: int = 128
     """The dimensionality of the state representation in Mamba layers."""
 
+    mamba_expand: int = 2
+    """The expand factor used in Mamba layers."""
+
     mamba_head_dim: int = 64
     """The dimensionality of the heads in the Mamba layers."""
 
@@ -699,7 +732,7 @@ class TransformerConfig(ModelParallelConfig):
     """The number of groups used in Mamba layers."""
 
     mamba_num_heads: Optional[int] = None
-    """The number of heads used in Mamba layers. 
+    """The number of heads used in Mamba layers.
     If None, the number of heads will be hidden_size * expand // mamba_head_dim."""
 
     use_mamba_mem_eff_path: bool = True
@@ -1422,12 +1455,9 @@ class TransformerConfig(ModelParallelConfig):
 
         if self.moe_permute_fusion:
             from megatron.core.transformer.moe.moe_utils import (
-                fused_permute,
-                fused_permute_with_probs,
+                fused_permute, fused_permute_with_probs,
                 fused_sort_chunks_by_index,
-                fused_sort_chunks_by_index_with_probs,
-                fused_unpermute,
-            )
+                fused_sort_chunks_by_index_with_probs, fused_unpermute)
 
             if (
                 fused_permute is None
@@ -1599,7 +1629,7 @@ class MLATransformerConfig(TransformerConfig):
 
     cache_mla_latents: bool = False
     """Cache the low dimensional tensors for MLA rather than full KV cache.
-       This is only for the dynamic inference backend and requires that 
+       This is only for the dynamic inference backend and requires that
        Flash MLA is installed."""
 
     def __post_init__(self):

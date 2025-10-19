@@ -3,18 +3,21 @@
 """General utilities."""
 import json
 import os
+import subprocess
 import sys
 import warnings
 from contextlib import contextmanager
 from datetime import datetime
 from collections import defaultdict
+from functools import lru_cache
 
 import torch
 
 from megatron.core.msc_utils import MultiStorageClientFeature, open_file
 
 try:
-    from transformer_engine.pytorch.optimizers import multi_tensor_applier, multi_tensor_l2norm
+    from transformer_engine.pytorch.optimizers import (multi_tensor_applier,
+                                                       multi_tensor_l2norm)
 except ImportError:
     try:
         from amp_C import multi_tensor_l2norm
@@ -42,6 +45,7 @@ from megatron.core.utils import (
     unwrap_model,
 )
 from megatron.legacy.model.module import param_is_not_shared
+from megatron.training import get_adlr_autoresume, get_args
 
 
 def calc_params_l2_norm(model, force_create_fp32_copy=False):
@@ -263,6 +267,58 @@ def logical_and_across_model_parallel_group(input: bool) -> bool:
     return bool(input.item())
 
 
+# hardcoded BF16 type peak flops for NVIDIA A100, H100, H200 GPU and AMD MI250, MI300X, AMD MI325X and Intel PVC
+@lru_cache
+def get_peak_flops(device_name: str = "NVIDIA H100 80GB HBM3") -> int:
+    try:
+        # Run the lspci command and capture the output
+        result = subprocess.run(["lspci"], stdout=subprocess.PIPE, text=True)
+        # Filter the output for lines containing both "NVIDIA" and "H100"
+        filtered_lines = [
+            line
+            for line in result.stdout.splitlines()
+            if "NVIDIA" in line and "H100" in line
+        ]
+        # Join all filtered lines into a single string
+        device_name = " ".join(filtered_lines) or device_name
+    except FileNotFoundError as e:
+        pass
+    if "A100" in device_name:
+        # data from https://www.nvidia.com/en-us/data-center/a100/
+        return 312e12
+    elif "H100" in device_name:
+        # data from https://www.nvidia.com/en-us/data-center/h100/
+        # NOTE: Specifications are one-half lower without sparsity.
+        if "NVL" in device_name:
+            return 835e12
+        elif "PCIe" in device_name:
+            return 756e12
+        else:  # for H100 SXM and other variants
+            return 989e12
+    elif "H200" in device_name:
+        # data from https://www.nvidia.com/en-us/data-center/h200/
+        return 989e12
+    elif "MI300X" in device_name or "MI325X" in device_name:
+        # MI300X data from https://www.amd.com/en/products/accelerators/instinct/mi300/mi300x.html
+        # MI325X data from https://www.amd.com/en/products/accelerators/instinct/mi300/mi325x.html
+        return 1300e12
+    elif "MI250X" in device_name:
+        # data from https://www.amd.com/en/products/accelerators/instinct/mi200/mi250x.html (per GCD)
+        return 191.5e12
+    elif "Data Center GPU Max 1550" in device_name:
+        # Also known as Ponte Vecchio (PVC).
+        # data from https://www.intel.com/content/www/us/en/docs/oneapi/optimization-guide-gpu/2025-0/intel-xe-gpu-architecture.html
+        # Dot Product Accumulate Systolic (DPAS):
+        # - Freq: 1300MHz
+        # - #ops: 512
+        # Full EU mode (i.e. 512 max compute units): 340.8 TFLOPS (BF16)
+        # Standard EU mode (i.e. 448 max compute units): 298.2 TFLOPS (BF16)
+        max_comp_units = torch.xpu.get_device_properties("xpu").max_compute_units
+        return 512 * max_comp_units * 1300 * 10**6
+    else:  # for other GPU types, assume A100
+        return 312e12
+
+
 def report_memory(name):
     """Simple GPU memory report."""
     mega_bytes = 1024.0 * 1024.0
@@ -271,6 +327,7 @@ def report_memory(name):
     string += ' | max allocated: {}'.format(torch.cuda.max_memory_allocated() / mega_bytes)
     string += ' | reserved: {}'.format(torch.cuda.memory_reserved() / mega_bytes)
     string += ' | max reserved: {}'.format(torch.cuda.max_memory_reserved() / mega_bytes)
+    string += ' | MEM: {:0.2f}%'.format(torch.cuda.max_memory_reserved() / torch.cuda.get_device_properties().total_memory * 100)
     if mpu.get_data_parallel_rank() == 0:
         print("[Rank {}] {}".format(torch.distributed.get_rank(), string), flush=True)
 
@@ -527,6 +584,10 @@ def get_batch_on_this_tp_rank(data_iterator):
             ),
             'position_ids': data["position_ids"].cuda(non_blocking=True),
         }
+        if "dropout_mask" in data:
+            batch['dropout_mask'] = data["dropout_mask"].cuda(non_blocking=True)
+       else:
+            batch['dropout_mask'] = torch.empty_like(batch["loss_mask"], dtype=torch.bool)
 
         if args.pipeline_model_parallel_size == 1:
             _broadcast(batch['tokens'])
@@ -534,11 +595,13 @@ def get_batch_on_this_tp_rank(data_iterator):
             _broadcast(batch['loss_mask'])
             _broadcast(batch['attention_mask'])
             _broadcast(batch['position_ids'])
+            _broadcast(batch['dropout_mask'])
 
         elif mpu.is_pipeline_first_stage():
             _broadcast(batch['tokens'])
             _broadcast(batch['attention_mask'])
             _broadcast(batch['position_ids'])
+            _broadcast(batch['dropout_mask'])
 
         elif mpu.is_pipeline_last_stage():
             # Multi-Token Prediction (MTP) layers need tokens and position_ids to calculate embedding.
@@ -581,6 +644,11 @@ def get_batch_on_this_tp_rank(data_iterator):
             dtype=torch.int64,
             device=torch.cuda.current_device(),
         )
+        dropout_mask=torch.empty(
+            (args.micro_batch_size,args.seq_length),
+            dtype = torch.bool,
+            device = torch.cuda.current_device(),
+        )
 
         if args.pipeline_model_parallel_size == 1:
             _broadcast(tokens)
@@ -588,14 +656,16 @@ def get_batch_on_this_tp_rank(data_iterator):
             _broadcast(loss_mask)
             _broadcast(attention_mask)
             _broadcast(position_ids)
+            _broadcast(dropout_mask)
 
         elif mpu.is_pipeline_first_stage():
             labels = None
             loss_mask = None
 
-            _broadcast(tokens)
-            _broadcast(attention_mask)
-            _broadcast(position_ids)
+           _broadcast(tokens)
+           _broadcast(attention_mask)
+           _broadcast(position_ids)
+           _broadcast(dropout_mask)
 
         elif mpu.is_pipeline_last_stage():
             # Multi-Token Prediction (MTP) layers need tokens and position_ids to calculate embedding.
@@ -612,13 +682,14 @@ def get_batch_on_this_tp_rank(data_iterator):
             _broadcast(loss_mask)
             _broadcast(attention_mask)
 
-        batch = {
-            'tokens': tokens,
-            'labels': labels,
-            'loss_mask': loss_mask,
-            'attention_mask': attention_mask,
-            'position_ids': position_ids,
-        }
+       batch = {
+           'tokens': tokens,
+           'labels': labels,
+           'loss_mask': loss_mask,
+           'attention_mask': attention_mask,
+           'position_ids': position_ids,
+           'dropout_mask': dropout_mask,
+       }
 
     return batch
 
@@ -635,7 +706,7 @@ def to_empty_if_meta_device(module: torch.nn.Module, *, device: torch.device, re
     accidently overwrite buffers with precomputed values during construction. Given the
     goal is to only materialize those tensors on meta device, this function checks the
     device first and only move the tensor to the destination if it is not on meta device.
-   
+
     Args:
         module: The target module to apply this transformation.
         device: The desired device of the parameters

@@ -2,9 +2,10 @@
 """Pretrain and SFT Mamba."""
 
 import os
-import torch
 from functools import partial
 from typing import List, Optional, Tuple, Union
+
+import torch
 
 from model_provider import model_provider
 from mamba_builders import mamba_builder
@@ -15,6 +16,10 @@ from megatron.training import inprocess_restart
 from megatron.training import print_rank_0
 from megatron.training import get_timers
 from megatron.core import mpu
+from megatron.core.datasets.blended_megatron_dataset_builder import \
+    BlendedMegatronDatasetBuilder
+from megatron.core.datasets.gpt_dataset import (GPTDataset, GPTDatasetConfig,
+                                                MockGPTDataset)
 from megatron.core.enums import ModelType
 from megatron.core.tokenizers.text.utils.build_tokenizer import build_tokenizer
 from megatron.core.datasets.blended_megatron_dataset_builder import BlendedMegatronDatasetBuilder
@@ -53,7 +58,7 @@ def get_batch(data_iterator, vp_stage=None):
 
     # TODO: this is pretty hacky, find a better way
     if not is_first_or_last_pipeline_stage(vp_stage):
-        return None, None, None, None, None
+        return None, None, None, None, None, None
 
     # get batches based on the TP rank you are on
     batch = get_batch_on_this_tp_rank(data_iterator)
@@ -143,12 +148,12 @@ def forward_step(data_iterator, model: MambaModel):
     global stimer
     with stimer(bdata=True):
         vp_stage = get_attr_wrapped_model(model, "vp_stage")
-        tokens, labels, loss_mask, attention_mask, position_ids = get_batch(data_iterator, vp_stage)
+        tokens, labels, loss_mask, attention_mask, position_ids, dropout_mask = get_batch(data_iterator, vp_stage)
     timers('batch-generator').stop()
 
     with stimer:
         output_tensor = model(tokens, position_ids, attention_mask,
-                              labels=labels)
+                              labels=labels, dropout_mask=dropout_mask)
 
     # [ModelOpt]: model is needed to access ModelOpt distillation losses
     return output_tensor, partial(loss_func, loss_mask, model=model)

@@ -16,3 +16,8 @@ onelogger.err
 runs/
 /test_cases/
 **/dist/
+triton-cache/
+tmp*
+torchelastic_*
+pymp-*
+torchinductor_*

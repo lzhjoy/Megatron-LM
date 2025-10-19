@@ -7,6 +7,7 @@ from typing import AsyncGenerator, Dict, List, Optional, Union
 
 import torch
 
+from megatron.core import mpu
 from megatron.core.inference.async_stream import AsyncStream
 from megatron.core.inference.engines.abstract_engine import AbstractEngine
 from megatron.core.inference.inference_request import InferenceRequest
@@ -68,6 +69,7 @@ class StaticInferenceEngine(AbstractEngine):
         self.controller = text_generation_controller
         self.random_seed = random_seed
         self.scheduler = Scheduler(max_batch_size=max_batch_size)
+        self.tbar_disable = not (mpu.is_pipeline_first_stage() and mpu.get_tensor_model_parallel_rank() == 0)
 
     def get_new_request_id(self) -> int:
         """Gets a new request id from the scheduler"""
@@ -214,7 +216,7 @@ class StaticInferenceEngine(AbstractEngine):
             )
 
         prev_num_requests_pending = self.scheduler.num_requests_pending()
-        tbar = tqdm(desc="static requests", total=prev_num_requests_pending)
+        tbar = tqdm(desc="static requests", total=prev_num_requests_pending, disable=self.tbar_disable)
         while self.scheduler.have_requests_pending():
             active_requests: Dict[str, InferenceRequest] = self.scheduler.active_request_pool.copy()
             active_streams: Dict[str, AsyncStream] = OrderedDict()

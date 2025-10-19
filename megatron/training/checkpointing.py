@@ -286,7 +286,7 @@ def read_metadata(tracker_filename):
                 print_rank_0('ERROR: Invalid metadata file {}. Exiting'.format(
                     tracker_filename))
                 sys.exit()
-    assert iteration > 0 or release, 'error parsing metadata file {}'.format(
+    assert iteration >= 0 or release, 'error parsing metadata file {}'.format(
         tracker_filename)
 
     # Get the max iteration retrieved across the ranks.
@@ -1273,12 +1273,27 @@ def load_args_from_checkpoint(
     _set_arg('add_qkv_bias', force=True)
     _set_arg('squared_relu', force=True)
     _set_arg('swiglu', force=True)
+    _set_arg('sqreglu', force=True)
+    _set_arg('geglu', force=True)
     _set_arg('untie_embeddings_and_output_weights', force=True)
     _set_arg('apply_layernorm_1p', force=True)
     _set_arg('normalization', force=True)
+    _set_arg('qk_l2_norm', force=True)
+    _set_arg('qk_layernorm', force=True)
     _set_arg('apply_query_key_layer_scaling', force=True)
     _set_arg('attention_dropout', force=True)
     _set_arg('hidden_dropout', force=True)
+    _set_arg('log_layer_hidden_states', force=True)  # this will change model architecture (e.g. separate laryernorm)
+    _set_arg('ffn_token_shift', force=True)
+    _set_arg('ffn_token_shift', old_arg_name='moe_token_shift', force=True)  # legacy compatibility for inference
+    _set_arg('attn_token_shift', force=True)
+    _set_arg('attn_output_gate', force=True)
+    _set_arg('path_attention', force=True)
+    _set_arg('window_size', force=True)
+
+    # legacy compatibility for inference
+    if isinstance(getattr(args, "ffn_token_shift", None), bool):
+        setattr(args, "ffn_token_shift", "cat")
 
     _set_arg('hybrid_override_pattern', force=True)
     _set_arg('spec', force=True)

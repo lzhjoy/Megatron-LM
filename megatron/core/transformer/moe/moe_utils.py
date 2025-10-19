@@ -1,7 +1,7 @@
 # Copyright (c) 2024, NVIDIA CORPORATION. All rights reserved.
 
 import math
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Literal
 
 import torch
 
@@ -817,6 +817,15 @@ def track_moe_metrics(
 
     if mtp_num_layers is not None:
         num_moe_layers += mtp_num_layers
+    if writer is not None:
+        # multiple loss_scale (= 1 / num_micro_batches)
+        aux_losses = {k: v['values'].float() * loss_scale for k, v in tracker.items()}
+        for name, loss_list in aux_losses.items():
+            if total_loss_dict is not None:
+                if name not in total_loss_dict:
+                    total_loss_dict[name] = loss_list.sum() / num_moe_layers
+                else:
+                    total_loss_dict[name] += loss_list.sum() / num_moe_layers
 
     aux_losses = {k: v['values'].float() * loss_scale for k, v in tracker.items()}
     for name, loss_list in aux_losses.items():
@@ -851,7 +860,7 @@ def track_moe_metrics(
     clear_aux_losses_tracker()
 
 
-def get_updated_expert_bias(tokens_per_expert, expert_bias, expert_bias_update_rate):
+def get_updated_expert_bias(tokens_per_expert, expert_bias, expert_bias_update_rate, method: Literal["sign", "rms_norm"] = "sign"):
     """Update expert bias for biased expert routing. See https://arxiv.org/abs/2408.15664v1#
 
     Args:
@@ -868,8 +877,14 @@ def get_updated_expert_bias(tokens_per_expert, expert_bias, expert_bias_update_r
         )
         average_tokens = tokens_per_expert.sum(dim=-1, keepdim=True) / tokens_per_expert.shape[-1]
         offset = average_tokens - tokens_per_expert
-        updated_expert_bias = expert_bias + torch.sign(offset) * expert_bias_update_rate
-        return updated_expert_bias
+        if method == "sign":
+            updated_expert_bias = expert_bias + torch.sign(offset) * expert_bias_update_rate
+        elif method == "rms_norm":
+            updated_expert_bias = expert_bias + torch.rms_norm(offset, offset.shape[-1:]) * expert_bias_update_rate
+        else:    
+            raise ValueError(f"Not support expert bias update method {method}.")
+        max_vio = (-offset.min(dim=-1)[0] / average_tokens).max()
+        return updated_expert_bias, max_vio
 
 
 def maybe_move_tensor_to_cpu(tensor, as_numpy=False, record_stream=False):

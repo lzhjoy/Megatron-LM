@@ -137,8 +137,23 @@ class MLP(MegatronModule):
             tp_group=tp_group,
         )
 
+        # Whether enable token shift (i.e. short conv)
+        self.ffn_token_shift = self.config.ffn_token_shift
+
     def forward(self, hidden_states, per_token_scale=None):
         """Perform the forward pass through the MLP block."""
+        if self.ffn_token_shift == "cat":
+            # [S/TP, B, H]
+            H = hidden_states.shape[-1]
+            hidden_states = torch.cat([
+                F.pad(hidden_states, (0, 0, 0, 0, 1, 0), "constant", 0)[:-1, :, :H//2],
+                hidden_states[:, :, H//2:],
+            ], dim = -1)
+        elif self.ffn_token_shift == "subtraction":
+            hidden_states = F.pad(hidden_states, (0, 0, 0, 0, 1, -1), "constant", 0) - hidden_states
+        elif self.ffn_token_shift == "addition":
+            hidden_states = F.pad(hidden_states, (0, 0, 0, 0, 1, -1), "constant", 0) + hidden_states
+
         # [s, b, 4 * h/p]
         nvtx_range_push(suffix="linear_fc1")
         intermediate_parallel, bias_parallel = self.linear_fc1(hidden_states)

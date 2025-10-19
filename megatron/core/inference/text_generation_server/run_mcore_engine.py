@@ -1,7 +1,10 @@
 # Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
 
 import inspect
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Optional, Union
 
+import torch
+from itertools import zip_longest
 from megatron.core import mpu
 from megatron.core.inference.communication_utils import broadcast_float_list
 from megatron.core.inference.inference_request import InferenceRequest
@@ -22,11 +25,19 @@ def run_mcore_engine(
 ):
     """Server-compatible version of the MCore Engine, used in
     tools/run_text_generation_server.py."""
+    print("Warning: this is not checked since b-transplant.")
+    if isinstance(logprobs, bool):
+        return_output_log_probs = int(logprobs)
+        top_n_logprobs = 0
+    else:
+        return_output_log_probs = 0
+        top_n_logprobs = logprobs
 
     values = [tokens_to_generate, logprobs, top_k, top_p, temperature, top_n_logprobs, random_seed]
     values_float_tensor = broadcast_float_list(len(values), float_list=values, data_parallel=False)
     tokens_to_generate = int(values_float_tensor[0].item())
-    return_output_log_probs = bool(values_float_tensor[1].item())
+    top_n_logprobs = int(values_float_tensor[1].item())
+    return_output_log_probs = bool(top_n_logprobs > 0) or bool(values_float_tensor[5].item())
     top_k = int(values_float_tensor[2].item())
     top_p = values_float_tensor[3].item()
     temperature = values_float_tensor[4].item()
@@ -89,15 +100,40 @@ def run_mcore_engine(
 
     result = engine.generate(inference_requests=requests)
 
+    def merge_logprobs(prompt_token_ids: List[int], token_ids: List[int], req: InferenceRequest):
+        results = []
+        all_tokens = prompt_token_ids + token_ids
+        lps = req.prompt_log_probs + req.generated_log_probs
+        nlps = [None] * len(req.prompt_log_probs) + (req.generated_top_n_logprobs if req.generated_top_n_logprobs else [])
+        for t, lp, nlp in zip_longest(all_tokens, lps, nlps):
+            logprobs = {t: lp}
+            if nlp is not None:    
+                for k, v in nlp.items():
+                    if isinstance(k, str):
+                        try:
+                            k = engine.text_generation_controller.tokenizer.vocab[k]
+                        except KeyError:
+                            if k != '':
+                                # k == '' is a known KeyError
+                                print(f"Catch unknown KeyError: k='{k}' v='{v}'")
+                            continue
+                    logprobs[k] = v
+            results.append(logprobs)
+        return results
+
     # Only post-process on first stage.
     if mpu.is_pipeline_first_stage():
         response_dict = {
-            "text": [x.prompt + x.generated_text for x in result],
-            "tokens": [x.prompt_tokens + x.generated_tokens.tolist() for x in result],
+            "index": [x.request_id for x in result], 
+            "text": [x.generated_text for x in result],
+            "prompt": [x.prompt for x in result],
+            "token_ids": [x.generated_tokens.tolist() for x in result],
+            "prompt_token_ids": [x.prompt_tokens for x in result],
         }
         if sampling_params.return_log_probs:
-            response_logprobs = [x.prompt_log_probs + x.generated_log_probs for x in result]
-            response_dict["logprobs"] = response_logprobs
+            response_dict["token_logprobs"] = [x.prompt_log_probs + x.generated_log_probs for x in result]
+            response_dict["top_logprobs"] = [merge_logprobs(ptk, tk, x) for ptk, tk, x in zip(response_dict["prompt_token_ids"], response_dict["token_ids"], result)]
+
         if sampling_params.return_segments:
             response_dict["segments"] = [x.segments for x in result]
         if sampling_params.top_n_logprobs > 0:

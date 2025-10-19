@@ -1,7 +1,7 @@
 # Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
 
 import warnings
-from typing import Optional, Union
+from typing import Optional, Union, Literal
 
 from megatron.core.fusions.fused_bias_dropout import get_bias_dropout_add
 from megatron.core.models.backends import BackendSpecProvider, LocalSpecProvider
@@ -9,6 +9,7 @@ from megatron.core.models.gpt.moe_module_specs import get_moe_module_spec_for_ba
 from megatron.core.transformer.attention import SelfAttention, SelfAttentionSubmodules
 from megatron.core.transformer.enums import AttnMaskType, LayerType
 from megatron.core.transformer.identity_op import IdentityOp
+from megatron.core.transformer.gated_attention import GatedSelfAttention, GatedSelfAttentionSubmodules
 from megatron.core.transformer.mlp import MLP, MLPSubmodules
 from megatron.core.transformer.multi_latent_attention import (
     MLASelfAttention,
@@ -32,6 +33,7 @@ from megatron.core.transformer.transformer_layer import (
     TransformerLayerSubmodules,
     get_transformer_layer_offset,
 )
+from megatron.core.utils import is_te_min_version
 
 try:
     import transformer_engine as te  # pylint: disable=unused-import
@@ -54,7 +56,6 @@ except ImportError:
 
 try:
     import apex  # pylint: disable=unused-import
-
     from megatron.core.fusions.fused_layer_norm import FusedLayerNorm
 
     HAVE_APEX = True
@@ -70,6 +71,7 @@ except ImportError:
 
 
 def get_gpt_layer_with_transformer_engine_spec(
+    *,
     num_experts: Optional[int] = None,
     moe_grouped_gemm: Optional[bool] = False,
     qk_layernorm: Optional[bool] = False,
@@ -80,6 +82,9 @@ def get_gpt_layer_with_transformer_engine_spec(
     use_te_op_fuser: Optional[bool] = False,
     use_kitchen: bool = False,
     use_te_activation_func: bool = False,
+    attn_output_gate: Optional[Literal['lora', 'full']] = None,
+    log_layer_hidden_states: Optional[list] = None,
+    path_attention: Optional[Literal["full", "full_rope"]] = None,
 ) -> ModuleSpec:
     """Use this spec to use lower-level Transformer Engine modules (required for fp8 training).
 
@@ -161,16 +166,79 @@ def get_gpt_layer_with_transformer_engine_spec(
                 mlp_bda=get_bias_dropout_add,
             ),
         )
-    else:
+    elif path_attention is not None:
+        from megatron.core.transformer.path_attention import (
+            ParallelPaTHAttention, PaTHAttention, PaTHAttentionSubmodules)
+
         qk_norm = backend.layer_norm(for_qk=True)
+
+        # If we want to log the output hidden states of input_layernorm,
+        # we have to split TELayerNormColumnParallelLinear op.
+        if isinstance(log_layer_hidden_states, list) and "input_layernorm" in log_layer_hidden_states:
+            input_layernorm = backend.layer_norm()
+            linear_qkvwb = backend.column_parallel_linear()
+        else:
+            input_layernorm = IdentityOp
+            linear_qkvwb = backend.column_parallel_layer_norm_linear()
+
         return ModuleSpec(
             module=TransformerLayer,
             submodules=TransformerLayerSubmodules(
+                input_layernorm=input_layernorm,
                 self_attention=ModuleSpec(
-                    module=SelfAttention,
+                    module=PaTHAttention,
+                    params={"impl": path_attention},
+                    submodules=PaTHAttentionSubmodules(
+                        linear_qkvwb=linear_qkvwb,
+                        core_attention=ParallelPaTHAttention,
+                        linear_proj=backend.row_parallel_linear(),
+                        q_layernorm=(
+                            L2Norm if qk_l2_norm else (qk_norm if qk_layernorm else IdentityOp)
+                        ),
+                        k_layernorm=(
+                            L2Norm if qk_l2_norm else (qk_norm if qk_layernorm else IdentityOp)
+                        ),
+                    ),
+                ),
+                self_attn_bda=get_bias_dropout_add,
+                pre_mlp_layernorm=backend.layer_norm() if num_experts else IdentityOp,
+                mlp=mlp,
+                mlp_bda=get_bias_dropout_add,
+            ),
+        )
+    else:
+        if attn_output_gate is not None:
+            self_attn_module = GatedSelfAttention
+            self_attn_submodules = GatedSelfAttentionSubmodules
+            self_attn_kwargs = {
+                "linear_gate_down_proj": backend.column_parallel_linear() if attn_output_gate == 'lora' else None,
+                "linear_gate_up_proj": backend.row_parallel_linear() if attn_output_gate == 'lora' else None,
+            }
+        else:
+            self_attn_module = SelfAttention
+            self_attn_submodules = SelfAttentionSubmodules
+            self_attn_kwargs = {}
+
+        qk_norm = backend.layer_norm(for_qk=True)
+
+        # If we want to log the output hidden states of input_layernorm,
+        # we have to split TELayerNormColumnParallelLinear op.
+        if isinstance(log_layer_hidden_states, list) and "input_layernorm" in log_layer_hidden_states:
+            input_layernorm = backend.layer_norm()
+            linear_qkv = backend.column_parallel_linear()
+        else:
+            input_layernorm = IdentityOp
+            linear_qkv = backend.column_parallel_layer_norm_linear()
+
+        return ModuleSpec(
+            module=TransformerLayer,
+            submodules=TransformerLayerSubmodules(
+                input_layernorm=input_layernorm,
+                self_attention=ModuleSpec(
+                    module=self_attn_module,
                     params={"attn_mask_type": AttnMaskType.causal},
-                    submodules=SelfAttentionSubmodules(
-                        linear_qkv=backend.column_parallel_layer_norm_linear(),
+                    submodules=self_attn_submodules(
+                        linear_qkv=linear_qkv,
                         core_attention=backend.core_attention(),
                         linear_proj=backend.row_parallel_linear(),
                         q_layernorm=(
@@ -179,6 +247,7 @@ def get_gpt_layer_with_transformer_engine_spec(
                         k_layernorm=(
                             L2Norm if qk_l2_norm else (qk_norm if qk_layernorm else IdentityOp)
                         ),
+                        **self_attn_kwargs,
                     ),
                 ),
                 self_attn_bda=get_bias_dropout_add,
@@ -207,6 +276,8 @@ def get_gpt_layer_local_spec(
     normalization: Optional[str] = None,
     qk_l2_norm: Optional[bool] = False,
     use_kitchen: bool = False,
+    attn_output_gate: Optional[Literal['lora', 'full']] = None,
+    path_attention: Optional[Literal["full"]] = None,
 ) -> ModuleSpec:
     """Use this spec for an implementation using only modules in Megatron-Core.
 
@@ -277,15 +348,60 @@ def get_gpt_layer_local_spec(
                 mlp_bda=get_bias_dropout_add,
             ),
         )
-    else:
+    elif path_attention is not None:
+        from megatron.core.transformer.path_attention import (
+            ParallelPaTHAttention, PaTHAttention, PaTHAttentionSubmodules)
+
         return ModuleSpec(
             module=TransformerLayer,
             submodules=TransformerLayerSubmodules(
                 input_layernorm=layer_norm,
                 self_attention=ModuleSpec(
-                    module=SelfAttention,
+                    module=PaTHAttention,
+                    params={"impl": path_attention},
+                    submodules=PaTHAttentionSubmodules(
+                        linear_qkvwb=backend.column_parallel_linear(),
+                        core_attention=ParallelPaTHAttention,
+                        linear_proj=backend.row_parallel_linear(),
+                        q_layernorm=(
+                            L2Norm if qk_l2_norm else (qk_norm if qk_layernorm else IdentityOp)
+                        ),
+                        k_layernorm=(
+                            L2Norm if qk_l2_norm else (qk_norm if qk_layernorm else IdentityOp)
+                        ),
+                    ),
+                ),
+                self_attn_bda=get_bias_dropout_add,
+                pre_mlp_layernorm=layer_norm,
+                mlp=mlp,
+                mlp_bda=get_bias_dropout_add,
+                sharded_state_dict_keys_map={
+                    'input_layernorm.': 'self_attention.linear_qkv.layer_norm_',
+                    'pre_mlp_layernorm.': 'mlp.linear_fc1.layer_norm_',
+                },
+            ),
+        )
+    else:
+        if attn_output_gate is not None:
+            self_attn_module = GatedSelfAttention
+            self_attn_submodules = GatedSelfAttentionSubmodules
+            self_attn_kwargs = {
+                "linear_gate_down_proj": backend.column_parallel_linear() if attn_output_gate == 'lora' else None,
+                "linear_gate_up_proj": backend.row_parallel_linear() if attn_output_gate == 'lora' else None,
+            }
+        else:
+            self_attn_module = SelfAttention
+            self_attn_submodules = SelfAttentionSubmodules
+            self_attn_kwargs = {}
+
+        return ModuleSpec(
+            module=TransformerLayer,
+            submodules=TransformerLayerSubmodules(
+                input_layernorm=layer_norm,
+                self_attention=ModuleSpec(
+                    module=self_attn_module,
                     params={"attn_mask_type": AttnMaskType.causal},
-                    submodules=SelfAttentionSubmodules(
+                    submodules=self_attn_submodules(
                         linear_qkv=backend.column_parallel_linear(),
                         core_attention=backend.core_attention(),
                         linear_proj=backend.row_parallel_linear(),
@@ -295,6 +411,7 @@ def get_gpt_layer_local_spec(
                         k_layernorm=(
                             L2Norm if qk_l2_norm else (qk_norm if qk_layernorm else IdentityOp)
                         ),
+                        **self_attn_kwargs,
                     ),
                 ),
                 self_attn_bda=get_bias_dropout_add,
@@ -443,6 +560,8 @@ def get_gpt_decoder_block_spec(
             normalization=normalization,
             qk_l2_norm=qk_l2_norm,
             use_kitchen=config.use_kitchen,
+            attn_output_gate=config.attn_output_gate,
+            log_layer_hidden_states=config.log_layer_hidden_states,
         )
         moe_layer_spec = get_gpt_layer_local_spec(
             num_experts=config.num_moe_experts,
@@ -453,6 +572,8 @@ def get_gpt_decoder_block_spec(
             normalization=normalization,
             qk_l2_norm=qk_l2_norm,
             use_kitchen=config.use_kitchen,
+            attn_output_gate=config.attn_output_gate,
+            log_layer_hidden_states=config.log_layer_hidden_states,
         )
 
     # Parse config.moe_layer_freq to determine the pattern of expert/dense layers.

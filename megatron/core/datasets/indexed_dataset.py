@@ -306,6 +306,8 @@ class _IndexReader(object):
             t_end = time.time()
             log_single_rank(logger, logging.DEBUG, f"\t> time elapsed: {t_end - t_beg:4f} seconds")
 
+        if self.sequence_lengths.shape[0] == self.document_indices[-1] + 1:  # adapt to RADLADS dataset
+            self.document_indices = numpy.append(self.document_indices, self.sequence_lengths.shape[0])
         assert self.sequence_lengths.shape[0] == len(self)
         assert self.sequence_lengths.shape[0] == self.sequence_count
         assert self.sequence_lengths.shape[0] == self.document_indices[-1]

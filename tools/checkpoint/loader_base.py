@@ -451,6 +451,8 @@ class MegatronCheckpointLoaderBase:
         md.qkv_bias = self.margs.add_qkv_bias
         md.norm_has_bias = norm_has_bias
         md.swiglu = self.margs.swiglu
+        md.sqreglu = self.margs.sqreglu
+        md.geglu = self.margs.geglu
         md.previous_tensor_parallel_size = self.margs.tensor_model_parallel_size
         md.previous_pipeline_parallel_size = self.margs.pipeline_model_parallel_size
         md.true_vocab_size = true_vocab_size

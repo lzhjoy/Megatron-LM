@@ -6,47 +6,47 @@ import argparse
 import dataclasses
 import json
 import os
-from pathlib import Path
 import re
 import types
 import warnings
+from pathlib import Path
 
 import torch
 import torch.nn.functional as F
 from packaging.version import Version as PkgVersion
 
+from megatron.core.activations import squared_relu
 from megatron.core.dist_checkpointing.validation import StrictHandling
+from megatron.core.fusions.fused_bias_geglu import quick_gelu
 from megatron.core.models.retro.utils import (
     get_config_path as get_retro_config_path,
+)
+from megatron.core.models.retro.utils import (
     get_gpt_data_dir as get_retro_data_dir,
+)
+from megatron.core.msc_utils import MultiStorageClientFeature
+from megatron.core.quantization.utils import (
+    kitchen_quantization_recipe_config,
+    load_quantization_recipe,
 )
 from megatron.core.rerun_state_machine import RerunStateMachine
 from megatron.core.transformer import MLATransformerConfig, TransformerConfig
-from megatron.core.transformer.pipeline_parallel_layer_layout import PipelineParallelLayerLayout
 from megatron.core.transformer.enums import AttnBackend
-from megatron.core.transformer.heterogeneous.heterogeneous_config import (
-    HeterogeneousTransformerConfig,
-    MLPConfig,
+from megatron.core.transformer.pipeline_parallel_layer_layout import (
+    PipelineParallelLayerLayout,
 )
 from megatron.core.utils import (
     get_torch_version,
     is_te_min_version,
     is_torch_min_version,
 )
-from megatron.core.activations import squared_relu
-from megatron.core.fusions.fused_bias_geglu import quick_gelu
 from megatron.training.utils import (
     get_device_arch_version,
-    update_use_dist_ckpt,
     print_rank_0,
+    update_use_dist_ckpt,
     warn_rank_0,
 )
-from megatron.core.msc_utils import MultiStorageClientFeature
 
-from megatron.core.quantization.utils import (
-    kitchen_quantization_recipe_config,
-    load_quantization_recipe,
-)
 
 def add_megatron_arguments(parser: argparse.ArgumentParser):
     """"Add Megatron-LM arguments to the given parser."""
@@ -119,6 +119,7 @@ def parse_args(extra_args_provider=None, ignore_unknown_args=False):
 
     # Args to disable MSC
     if not args.enable_msc:
+        from megatron.core.msc_utils import MultiStorageClientFeature
         MultiStorageClientFeature.disable()
         assert MultiStorageClientFeature.is_enabled() is False
         print('WARNING: The MSC feature is disabled.')
@@ -162,7 +163,7 @@ def validate_model_config_args_from_heterogeneous_config(args):
     )
 
     n_kv_heads_in_group = [
-        config["attention"]["n_heads_in_group"] for config in hf_config_dict.block_configs 
+        config["attention"]["n_heads_in_group"] for config in hf_config_dict.block_configs
         if config["attention"]["n_heads_in_group"] is not None
     ]
     assert all(num == n_kv_heads_in_group[0] for num in n_kv_heads_in_group), "num query head must be consistent across all layers"
@@ -351,8 +352,9 @@ def validate_args(args, defaults={}):
         'Currently only global and local checkpoints are supported'
     if args.non_persistent_ckpt_type == 'local':
         try:
-            from nvidia_resiliency_ext.checkpointing.local.ckpt_managers.local_manager import \
-                LocalCheckpointManager
+            from nvidia_resiliency_ext.checkpointing.local.ckpt_managers.local_manager import (
+                LocalCheckpointManager,
+            )
         except ModuleNotFoundError as e:
             raise RuntimeError('nvidia_resiliency_ext is required for local checkpointing') from e
 
@@ -598,7 +600,7 @@ def validate_args(args, defaults={}):
 
                 assert num_layers % args.transformer_pipeline_model_parallel_size == 0, \
                     'Number of layers should be divisible by the pipeline-model-parallel size'
-    
+
     if args.virtual_pipeline_model_parallel_size is not None:
         if args.overlap_p2p_comm:
             assert args.pipeline_model_parallel_size > 1, \
@@ -658,7 +660,7 @@ def validate_args(args, defaults={}):
                 args.rank,
             )
         if args.fp4_param and not is_te_min_version("2.7.0.dev0"):
-            raise ValueError("--fp4-param requires Transformer Engine >= 2.7.0.dev0.")   
+            raise ValueError("--fp4-param requires Transformer Engine >= 2.7.0.dev0.")
 
     if args.overlap_param_gather_with_optimizer_step:
         assert args.use_distributed_optimizer, \
@@ -691,7 +693,7 @@ def validate_args(args, defaults={}):
     # FP4 param requires FP4 mode
     if args.fp4_param and not args.fp4:
         raise ValueError("--fp4-param-gather must be used together with --fp4-format.")
-    
+
     # FP4 requires TE >= 2.7.0.dev0
     if args.fp4 and not is_te_min_version("2.7.0.dev0"):
         raise ValueError("--fp4-format requires Transformer Engine >= 2.7.0.dev0 for NVFP4BlockScaling support.")
@@ -887,6 +889,18 @@ def validate_args(args, defaults={}):
         assert args.start_weight_decay is not None
         assert args.end_weight_decay is not None
 
+    # Attention output gate does not support multi latent attention for now
+    if args.attn_output_gate is not None:
+        assert not args.multi_latent_attention
+
+    # Make sure L2Norm and LayerNorm is not enabled at the same time
+    if args.qk_l2_norm:
+        assert args.qk_layernorm, "qk_layernorm must be Ture when apply L2 normalization to q and k"
+
+    # Embedding deviation loss
+    if args.emb_deviation_type in ["loss", "square_loss"]:
+        assert args.emb_deviation_loss_coeff is not None
+
     # Persistent fused layer norm.
     if not is_torch_min_version("1.11.0a0"):
         args.no_persist_layer_norm = True
@@ -1024,7 +1038,11 @@ def validate_args(args, defaults={}):
     if args.num_experts == 0:
         args.num_experts = None
     if args.num_experts is not None:
-        assert args.spec is None, "Model Spec must be None when using MoEs"
+        assert (
+            args.spec is None or args.spec == ["megatron.core.models.mamba.mamba_layer_specs", "mamba_moe_stack_spec"]
+        ), "Model Spec must be None or 'megatron.core.models.mamba.mamba_layer_specs mamba_moe_stack_spec' when using MoEs"
+    if args.moe_expert_capacity_factor == 0:
+        args.moe_expert_capacity_factor = None
     if args.num_experts is not None and args.moe_ffn_hidden_size is None:
         args.moe_ffn_hidden_size = args.ffn_hidden_size
         print("Warning: moe_ffn_hidden_size is not set, using ffn_hidden_size for MoE instead.")
@@ -1235,9 +1253,12 @@ def core_transformer_config_from_args(args, config_class=None):
 
     if args.multi_latent_attention:
         config_class = MLATransformerConfig
-    
+
     if args.heterogeneous_layers_config_path is not None:
         assert not args.multi_latent_attention, "Multi latent attention with heterogeneous layers is not supported."
+        from megatron.core.transformer.heterogeneous.heterogeneous_config import (
+            HeterogeneousTransformerConfig,
+        )
         config_class = HeterogeneousTransformerConfig
 
     # Translate args to core transformer configuration
@@ -1257,13 +1278,31 @@ def core_transformer_config_from_args(args, config_class=None):
     kw_args['num_layers_in_last_pipeline_stage']= args.decoder_last_pipeline_num_layers
     kw_args['fp8_param'] = args.fp8_param_gather
     if args.swiglu:
+        assert not args.sqreglu
+        assert not args.geglu
         kw_args['activation_func'] = F.silu
         kw_args['gated_linear_unit'] = True
         kw_args['bias_activation_fusion'] = args.bias_swiglu_fusion
+    elif args.sqreglu:
+        assert not args.swiglu
+        assert not args.geglu
+        assert not args.squared_relu
+        print("Warning: since b-transplant merge, this is not tested.")
+        kw_args['activation_func'] = squared_relu
+        kw_args['gated_linear_unit'] = True
+    elif args.geglu:
+        assert not args.sqreglu
+        assert not args.swiglu
+        assert not args.bias_gelu_fusion
+        print("Warning: since b-transplant merge, this is not tested.")
+        kw_args['gated_linear_unit'] = True
+        kw_args['bias_activation_fusion'] = False
     else:
         kw_args['bias_activation_fusion'] = args.bias_gelu_fusion
     if args.squared_relu:
         assert not args.swiglu
+        assert not args.geglu
+        assert not args.sqreglu
         kw_args['activation_func'] = squared_relu
     elif args.quick_geglu:
         assert not args.swiglu
@@ -1348,7 +1387,7 @@ def _add_transformer_engine_args(parser):
                        help='Number of layers at start to construct in bf16 when --first-last-layers-bf16 is enabled.')
     group.add_argument('--num-layers-at-end-in-bf16', type=int, default=1,
                        help='Number of layers at end to construct in bf16 when --first-last-layers-bf16 is enabled.')
-    
+
     # FP4 related arguments
     group.add_argument('--fp4-format', default=None,
                        choices=['e2m1'],
@@ -1488,7 +1527,7 @@ def _add_inference_args(parser):
                        help='Number of chunks along sequence dimension for MLP '
                        'computation during prefill')
     group.add_argument('--disable-chunked-prefill', default=False, action="store_true",
-                       help='Disable chunked prefill (chunked prefill is enabled by default).')  
+                       help='Disable chunked prefill (chunked prefill is enabled by default).')
     return parser
 
 
@@ -1650,6 +1689,10 @@ def _add_network_size_args(parser):
     group.add_argument('--glu-linear-offset', type=float, default=0.0,
                        help='Offset term in the GLU activation function: activation_func(x[0]) * (x[1] + offset). '
                             'Only used when gated_linear_unit is True')
+    group.add_argument('--sqreglu', action='store_true',
+                       help='Use gated linear units and squared relu activation instead of default gelu')
+    group.add_argument('--geglu', action='store_true',
+                       help='Use gated linear units and gelu')
     group.add_argument('--onnx-safe', type=bool, required=False,
                        help='Use workarounds for known problems with '
                        'Torch ONNX exporter')
@@ -1670,6 +1713,25 @@ def _add_network_size_args(parser):
                        'We compute the average of the MTP losses across all depths, '
                        'and multiply it the scaling factor to obtain the overall MTP loss, '
                        'which serves as an additional training objective.')
+    group.add_argument('--ffn-token-shift', type=str, default=None, choices=['cat', 'subtraction', 'addition'],
+                       help='Whether to use token time-shift before FFN. cat: https://zhuanlan.zhihu.com/p/399480671 '
+                       'subtraction: https://github.com/BlinkDL/RWKV-LM/blob/6bf7ac334fbcea2e2062bb97ed7c4dfca66db186/RWKV-v5/src/model.py#L977')
+    group.add_argument('--attn-token-shift', type=str, default=None, choices=['kv_shifting', 'kv_shifting_one'],
+                       help='Whether to use token time-shift before RoPE and core attention. kv_shifting: http://arxiv.org/abs/2411.19574 ')
+    group.add_argument('--attn-output-gate', type=str, default=None, choices=['full', 'lora'],
+                       help='Whether to use gated attention output.')
+    group.add_argument('--path-attention', type=str, default=None, choices=['full', 'full_rope'],
+                       help='Whether to use PaTH attention. http://arxiv.org/abs/2505.16381')
+    group.add_argument('--shortconv-kernel-size', type=int, default=3,
+                       help='Kernel size for short convolution in PaTH attention.')
+    group.add_argument('--emb-deviation-loss-coeff', type=float, default=0,
+                       help='Scaling coefficient for the embedding devication loss. Default 0 means disabled.')
+    group.add_argument('--emb-deviation-type', type=str, default=None, choices=['loss', 'square_loss', 'mean'],
+                       help='The embedding deviation mitigation strategy.')
+    group.add_argument('--window-size', type=int, nargs=2, default=None,
+                       help='Window size for sliding window attention. '
+                       'Specify as two integers: [forward_window, backward_window]. '
+                       'Use -1 for infinite window size. Example: --window-size 2048 0')
     return parser
 
 
@@ -1815,6 +1877,10 @@ def _add_logging_args(parser):
                        'cause increase in iteration time.')
     group.add_argument('--log-energy', action='store_true',
                        help='If set, log energy consumption (in Joules)')
+    group.add_argument('--increase-log-level-interval', type=int, default=1000,
+                       help='The number of steps in each cycle for increasing the log level to 2.')
+    group.add_argument('--increase-log-level-iters', type=int, default=5,
+                       help='The number of steps to increase the log level to 2 in each cycle.')
     group.add_argument('--no-barrier-with-level-1-timing', action='store_false',
                        help='If not set, use barrier with level 1 time '
                        'measurements. Note that this is up to the user '
@@ -1857,13 +1923,17 @@ def _add_logging_args(parser):
                        help='The wandb entity name. It is useful when '
                        'there are multiple sub-projects in a project. '
                        'https://community.wandb.ai/t/how-do-i-decide-which-account-private-or-team-to-upload-the-run-to/5704 '
-                       'Ignore wandb by default.')    
+                       'Ignore wandb by default.')
     group.add_argument('--wandb-exp-name', type=str, default='',
                        help='The wandb experiment name.')
     group.add_argument('--wandb-save-dir', type=str, default='',
                        help='Path to save the wandb results locally.')
     group.add_argument('--logging-level', type=int, default=None,
                        help='Set default logging level')
+    group.add_argument('--log-layer-hidden-states', nargs='+', type=str, default=[],
+                       help='Enable mean and std logging of hidden states in each transformer layer,'
+                       ' choices: embeddings, input_layernorm, linear_q, linear_k, q_layernorm, k_layernorm,'
+                       ' core_attention, linear_proj, linear_g, pre_mlp_layernorm, mlp.')
     return parser
 
 
@@ -1874,6 +1944,8 @@ def _add_regularization_args(parser):
                        help='Post attention dropout probability.')
     group.add_argument('--hidden-dropout', type=float, default=0.1,
                        help='Dropout probability for hidden state transformer.')
+    group.add_argument('--word-embedding-dropout-prob', type=float, default=0.0,
+                       help='Probability for word embedding dropout.')
     group.add_argument('--weight-decay', type=float, default=0.01,
                        help='Weight decay coefficient for L2 regularization.')
     group.add_argument('--start-weight-decay', type=float,
@@ -1896,6 +1968,15 @@ def _add_regularization_args(parser):
                        'numerical stability')
     group.add_argument('--sgd-momentum', type=float, default=0.9,
                        help='Momentum factor for sgd')
+    group.add_argument('--muon-matched-adamw-rms', type=float, default=0.2,
+                       help="The RMS of the matched AdamW's, typically 0.2 ~ 0.4")
+    group.add_argument('--muon-momentum', type=float, default=0.95,
+                       help='Momentum beta for muon')
+    group.add_argument('--muon-ns-steps', type=int, default=5,
+                       help='Number of Newton-Schultz iteartion steps for muon')
+    group.add_argument('--no-muon-nesterov', action='store_false',
+                       dest='muon_nesterov', default=True,
+                       help='If set, disable Nesterov momentum for muon')
     return parser
 
 
@@ -1905,7 +1986,7 @@ def _add_rl_args(parser):
                        help="Use the RL training step.")
     group.add_argument('--rl-prompts-per-eval', type=int, default=32,
                        help='Number of prompts to evaluate for for each RL task.'
-                        'This evaluation can be very expensive when using environments' 
+                        'This evaluation can be very expensive when using environments'
                         'that evaluate pass@k so we default to a lower number.')
     # TODO(rkirby): allow for "complete" evaluation when --rl-prompts-per-eval is set to -1
     group.add_argument('--grpo-prompts-per-step', type=int, default=32,
@@ -2192,7 +2273,7 @@ def _add_training_args(parser):
                        help='Enable bias only in the QKV linear layers',
                        dest='add_qkv_bias')
     group.add_argument('--optimizer', type=str, default='adam',
-                       choices=['adam', 'sgd'],
+                       choices=['adam', 'sgd', 'muon'],
                        help='Optimizer function')
     group.add_argument('--optimizer-cpu-offload', action='store_true',
                        help='Offload optimizer state to CPU')
@@ -2262,6 +2343,8 @@ def _add_training_args(parser):
                        help='The communicator group names to use high priority streams.')
     group.add_argument('--use-te-activation-func', action='store_true',
                        help='Use activation function kernel from Transformer Engine in MLP module.')
+    group.add_argument('--freeze-non-mamba', action='store_true',
+                       help='Freeze non-mamba parameters.')
 
     return parser
 
@@ -2380,6 +2463,8 @@ def _add_checkpointing_args(parser):
 
     group.add_argument('--save', type=str, default=None,
                        help='Output directory to save checkpoints to.')
+    group.add_argument('--no-save-step-one', action='store_true', default=None,
+                       help='Save the checkpoint of step 1.')
     group.add_argument('--save-interval', '--persistent-save-interval', type=int, default=None,
                        help='Number of iterations between persistent checkpoint saves.')
     group.add_argument('--save-retain-interval', type=int, default=None,
@@ -2657,14 +2742,14 @@ def _add_distributed_args(parser):
                        'layer in the context of partition and placement for pipeline parallelism.')
     group.add_argument('--use-distributed-optimizer', action='store_true',
                        help='Use distributed optimizer.')
-    group.add_argument('--use-nccl-ub', action='store_true', dest='nccl_ub', 
+    group.add_argument('--use-nccl-ub', action='store_true', dest='nccl_ub',
                        help='Use the userbuffer registration for DP/FSDP communication buffers.'
                        'This option will reduce GPU SM usage for the DP/FSDP communication,'
                        'which is improving the performance of the overlapped computation.')
     group.add_argument('--disable-symmetric-registration', action='store_true', dest='disable_symmetric_registration',
                        default=False, help='Disable symmetric (window) registration for NCCL userbuffer registration.'
                        'This option will force to use conventional (local) userbuffer registration when use-nccl-ub is set.')
-    group.add_argument('--use-sharp', action='store_true', 
+    group.add_argument('--use-sharp', action='store_true',
                        help='Required to enable SHARP communication.')
     group.add_argument('--sharp-enabled-group', type=str, default=None,
                        choices=['dp', 'dp_replica'],
@@ -3119,6 +3204,11 @@ def _add_moe_args(parser):
                        'dropless training with FP8 precision when num_local_experts > 1. This is a more '
                        'efficient way to pad for FP8 which eliminates the explicit padding in the '
                        'GroupedMLP layer.')
+    group.add_argument('--moe-router-bias-update-method', type=str,
+                       choices=['sign', 'rms_norm'],
+                       default='sign',
+                       help='The expert bias update method. https://spaces.ac.cn/archives/10815'
+                       'The default value sign is same as that used in DeepSeekV3.')
     group.add_argument('--moe-aux-loss-coeff', type=float, nargs='+', default=0.0,
                        help='Scaling coefficient for the aux loss: a starting value of 1e-2 is recommended.')
     group.add_argument('--moe-z-loss-coeff', type=float, default=None,
@@ -3187,9 +3277,9 @@ def _add_mla_args(parser):
 
 def _add_heterogeneous_args(parser):
     """
-    Heterogeneous models refer to transformer architectures where individual layers can differ 
+    Heterogeneous models refer to transformer architectures where individual layers can differ
     in configuration. Specifically:
-        - Attention or MLP layers can be replaced with either a linear layer or a no-op 
+        - Attention or MLP layers can be replaced with either a linear layer or a no-op
         - MLP intermediate dimensions can vary between layers
     We use the format of the HuggingFace config files in llama nemotron models to define the architecture.
     For example, https://huggingface.co/nvidia/Llama-3_3-Nemotron-Super-49B-v1/resolve/main/config.json
@@ -3271,6 +3361,8 @@ def _add_experimental_args(parser):
                        help='Number of heads for Mamba layers.'
                        'If not set, then the number of heads will be '
                        '--hidden-size * expand // --mamba-head-dim')
+    group.add_argument('--mamba-expand', type=int, default=2,
+                       help='Expand factor for Mamba layers.')
     group.add_argument('--is-hybrid-model', default=False, action="store_true",
                        help='Indicates whether the model is a hybrid model.')
     group.add_argument('--disable-mamba-mem-eff-path', default=False, action="store_true",
@@ -3339,6 +3431,6 @@ def _add_kitchen_quantization_arguments(parser: argparse.ArgumentParser):
 def _add_sft_args(parser):
     group = parser.add_argument_group(title='sft')
     group.add_argument('--sft', action="store_true", help='Megatron SFT training')
-    group.add_argument('--sft-tokenizer-prompt-format', type=str, default="nemotron-h-aligned", 
+    group.add_argument('--sft-tokenizer-prompt-format', type=str, default="nemotron-h-aligned",
                        help='SFT prompt format.')
     return parser

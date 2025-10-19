@@ -175,7 +175,12 @@ class TopKRouter(Router):
                 ),
             )
         else:
-            self.local_tokens_per_expert = None
+            # store local tokens per expert for vio calc
+            self.register_buffer(
+                'local_tokens_per_expert',
+                torch.zeros(self.config.num_moe_experts, dtype=torch.float32),
+                persistent=False,
+            )
             self.expert_bias = None
 
         # Initialize global tokens per expert for global aux loss
@@ -526,7 +531,7 @@ class TopKRouter(Router):
 
         # Update expert bias and tokens_per_expert
         # Prevent extra local tokens accumulation on evaluation or activation recomputation
-        if self.enable_expert_bias and torch.is_grad_enabled():
+        if torch.is_grad_enabled():
             with torch.no_grad():
                 self.local_tokens_per_expert += routing_map.sum(dim=0)
 
