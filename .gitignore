@@ -1,3 +1,4 @@
+log.perf_tool.*
 __pycache__
 *.so
 build
