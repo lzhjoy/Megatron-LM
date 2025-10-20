@@ -1728,10 +1728,6 @@ def _add_network_size_args(parser):
                        help='Scaling coefficient for the embedding devication loss. Default 0 means disabled.')
     group.add_argument('--emb-deviation-type', type=str, default=None, choices=['loss', 'square_loss', 'mean'],
                        help='The embedding deviation mitigation strategy.')
-    group.add_argument('--window-size', type=int, nargs=2, default=None,
-                       help='Window size for sliding window attention. '
-                       'Specify as two integers: [forward_window, backward_window]. '
-                       'Use -1 for infinite window size. Example: --window-size 2048 0')
     return parser
 
 
@@ -2918,6 +2914,9 @@ def _add_data_args(parser):
                        'with weighted dataset, we pass in a file path from which '
                        'we read that argument. This is useful when the list of data is '
                        'too big.')
+    group.add_argument('--load-complemental-dataset', nargs='+', default=None,
+                       help='Key(s) of the complemental dataset(s) to be loaded. '
+                       'Currently support `loss_mask` and `dropout_mask`.')
     group.add_argument('--per-split-data-args-path', type=str, default=None,
                        help='Path to per-split-data-args. Instead of feeding '
                        '`--(train|valid|test)-data-path` with weighted dataset, '

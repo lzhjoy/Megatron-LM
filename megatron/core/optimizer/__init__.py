@@ -63,7 +63,6 @@ def _get_param_groups(
     decoupled_lr: Optional[float],
     decoupled_min_lr: Optional[float],
     default_skip_embedding_weight_decay: bool = False,
-    muon_matched_adamw_rms: Optional[float],
     use_muon: bool = False,
 ) -> List[Dict]:
     """Create parameter groups for optimizer.
@@ -139,14 +138,14 @@ def _get_param_groups(
                 param, 'is_embedding_or_output_parameter', False
             ):
                 is_decoupled_lr = True
-                
+
             # check if linear params
             bias_flag = name.endswith(".bias")
             shape_flag = param.dim() == 2
             embedding_flag = "embedding" in name or "output_layer" in name
             muon_flag = use_muon and shape_flag \
                 and (not bias_flag) and (not embedding_flag)
-                
+
             if muon_flag:
                 key = (wd_mult, _lr_mult, is_expert_parallel)
                 if key not in muon_params_map:
@@ -294,7 +293,6 @@ def _get_param_groups_and_buffers(
         decoupled_lr=config.decoupled_lr,
         decoupled_min_lr=config.decoupled_min_lr,
         default_skip_embedding_weight_decay=default_skip_embedding_weight_decay,
-        muon_matched_adamw_rms=config.muon_matched_adamw_rms,
         use_muon = config.optimizer == 'muon',
     )
     param_groups = list(filter(filter_fn, param_groups))

@@ -586,7 +586,7 @@ def get_batch_on_this_tp_rank(data_iterator):
         }
         if "dropout_mask" in data:
             batch['dropout_mask'] = data["dropout_mask"].cuda(non_blocking=True)
-       else:
+        else:
             batch['dropout_mask'] = torch.empty_like(batch["loss_mask"], dtype=torch.bool)
 
         if args.pipeline_model_parallel_size == 1:
@@ -662,10 +662,10 @@ def get_batch_on_this_tp_rank(data_iterator):
             labels = None
             loss_mask = None
 
-           _broadcast(tokens)
-           _broadcast(attention_mask)
-           _broadcast(position_ids)
-           _broadcast(dropout_mask)
+            _broadcast(tokens)
+            _broadcast(attention_mask)
+            _broadcast(position_ids)
+            _broadcast(dropout_mask)
 
         elif mpu.is_pipeline_last_stage():
             # Multi-Token Prediction (MTP) layers need tokens and position_ids to calculate embedding.
@@ -682,14 +682,14 @@ def get_batch_on_this_tp_rank(data_iterator):
             _broadcast(loss_mask)
             _broadcast(attention_mask)
 
-       batch = {
-           'tokens': tokens,
-           'labels': labels,
-           'loss_mask': loss_mask,
-           'attention_mask': attention_mask,
-           'position_ids': position_ids,
-           'dropout_mask': dropout_mask,
-       }
+        batch = {
+            'tokens': tokens,
+            'labels': labels,
+            'loss_mask': loss_mask,
+            'attention_mask': attention_mask,
+            'position_ids': position_ids,
+            'dropout_mask': dropout_mask,
+        }
 
     return batch
 
