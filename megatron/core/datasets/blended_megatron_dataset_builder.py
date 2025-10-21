@@ -155,6 +155,7 @@ class BlendedMegatronDatasetBuilder(object):
 
         ##
         # All splits come from the same distribution
+        # Specify a unified dataset path, then split into train, valid, and test after loading all of it
         ##
         elif self.config.blend:
             prefixes, weights = self.config.blend
@@ -224,6 +225,7 @@ class BlendedMegatronDatasetBuilder(object):
 
         ##
         # Each split comes from a separate distribution
+        # Specify the paths of the train, valid, and test datasets separately
         ##
         else:
             blended_datasets = [None] * len(Split)

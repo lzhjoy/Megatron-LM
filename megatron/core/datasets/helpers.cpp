@@ -18,6 +18,50 @@ using namespace std;
 
 const int32_t LONG_SENTENCE_LEN = 512;
 
+// Segment tree supporting "max leaf value" query where leaves are capacities 1..L
+struct SegmentTree {
+    int n; // number of leaves (L)
+    int size; // power-of-two size
+    std::vector<int> tree; // max values
+
+    SegmentTree(int L=0) { build(L); }
+
+    void build(int L) {
+        n = L;
+        size = 1;
+        while (size < n+1) size <<= 1; // we index leaves by capacity value (1..n)
+        tree.assign(2*size, 0);
+    }
+
+    // set leaf at position pos (1..n) to value val
+    void set_leaf(int pos, int val) {
+        if (pos < 1 || pos > n) return;
+        int idx = size + pos;
+        tree[idx] = val;
+        idx >>= 1;
+        while (idx) {
+            tree[idx] = std::max(tree[idx<<1], tree[(idx<<1)|1]);
+            idx >>= 1;
+        }
+    }
+
+    // find a leaf whose value >= need. This implements the paper's query: at internal node go left if left child >= need else go right.
+    // Returns capacity (leaf index) or 0 if none.
+    int find_best_fit(int need) const {
+        if (need <= 0) return 0;
+        if (tree[1] < need) return 0; // no leaf qualifies
+        int idx = 1;
+        while (idx < size) {
+            int left = idx<<1;
+            if (tree[left] >= need) idx = left;
+            else idx = left|1;
+        }
+        int leaf_pos = idx - size;
+        if (leaf_pos >= 1 && leaf_pos <= n) return leaf_pos;
+        return 0;
+    }
+};
+
 
 void build_exhaustive_blending_indices(py::array_t<int16_t> &dataset_index, py::array_t<int64_t> &dataset_sample_index, const py::array_t<int64_t> &sizes, const int32_t num_datasets) {
   /*
@@ -151,7 +195,7 @@ py::array_t<T> build_sample_idx(
   const bool drop_last_partial_sequence = true,
   const int add_extra_token_to_sequence = 1
 ){
-  /* 
+  /*
       Sample index (sample_idx) is used for gpt2 like dataset for which the documents are flattened
       and the samples are built based on this 1-D flatten array. It is a 2D array with sizes
       [number-of-samples + 1, 2] where [..., 0] contains the index into `doc_idx` and [..., 1] is
@@ -230,7 +274,7 @@ py::array_t<T> build_sample_idx(
 
   // Method to deallocate memory.
   py::capsule free_when_done(
-    sample_idx, 
+    sample_idx,
     [](void *mem_){
 	    T *mem = reinterpret_cast<T*>(mem_);
 	    delete[] mem;
@@ -837,6 +881,248 @@ py::array build_blocks_mapping(const py::array_t<int64_t> &docs_,
   }
 }
 
+// Optimized Best-Fit-Decreasing (OBFD) packing
+// Inputs:
+// - lengths: 1D integer numpy array of item sizes
+// - L: bin capacity (max sequence length)
+// - mode: "bfd" or "ffd"
+// Returns a dict: {
+//   "assignments": numpy array of bin id for each input item in the original order,
+//   "bins": list of lists of item indices assigned to each bin (bin ids are 0..m-1),
+//   "rem": list of remaining capacities per bin
+// }
+
+py::dict pack_items(py::array_t<int, py::array::c_style | py::array::forcecast> lengths,
+                    int L,
+                    std::string mode = "bfd") {
+    if (L <= 0) throw std::invalid_argument("L must be > 0");
+    auto buf = lengths.unchecked<1>();
+    ssize_t N = buf.shape(0);
+    // Create items vector of pairs (length, original_index) for normal-sized items
+    // and handle oversized items separately
+    std::vector<std::pair<int,int>> items;
+    std::vector<std::pair<int,int>> oversized_items;
+    items.reserve(N);
+    for (ssize_t i = 0; i < N; ++i) {
+        int v = buf(i);
+        if (v <= 0) {
+            throw std::invalid_argument("Each item length must be > 0");
+        }
+        if (v > L) {
+            // Put oversized items in separate list
+            oversized_items.emplace_back(v, (int)i);
+        } else {
+            items.emplace_back(v, (int)i);
+        }
+    }
+
+    // Sort items decreasing by weight
+    std::sort(items.begin(), items.end(), [](const std::pair<int,int> &a, const std::pair<int,int> &b){
+        if (a.first != b.first) return a.first > b.first;
+        return a.second < b.second;
+    });
+
+    std::vector<int> assignment(N, -1);
+    std::vector<std::vector<int>> bin_to_items;
+    std::vector<int> rem; // remaining capacities per bin
+
+    if (mode == "ffd") {
+        // First-Fit Decreasing: simply keep bins in order and scan for first fit
+        for (const auto &it : items) {
+            int w = it.first;
+            int orig = it.second;
+            int chosen = -1;
+            for (size_t b = 0; b < rem.size(); ++b) {
+                if (rem[b] >= w) { chosen = (int)b; break; }
+            }
+            if (chosen == -1) {
+                // new bin
+                chosen = (int)rem.size();
+                rem.push_back(L);
+                bin_to_items.emplace_back();
+            }
+            // assign
+            rem[chosen] -= w;
+            bin_to_items[chosen].push_back(orig);
+            assignment[orig] = chosen;
+        }
+    } else if (mode == "bfd") {
+        // Best-Fit Decreasing with segment tree optimization
+        // space_to_bins[c] contains stack/vector of bin ids that currently have remaining capacity == c
+        std::vector<std::vector<int>> space_to_bins(L+1);
+        SegmentTree seg(L);
+
+        for (const auto &it : items) {
+            int w = it.first;
+            int orig = it.second;
+            int chosen_bin = -1;
+            // find best fit capacity >= w
+            int cap = seg.find_best_fit(w);
+            if (cap == 0) {
+                // no existing bin fits -> create new bin
+                chosen_bin = (int)rem.size();
+                rem.push_back(L);
+                bin_to_items.emplace_back();
+                // initially it has full capacity L: put into space_to_bins[L]
+                if (L > 0) {
+                    space_to_bins[L].push_back(chosen_bin);
+                    seg.set_leaf(L, L);
+                }
+                // now we will pop it below
+                cap = seg.find_best_fit(w);
+                // cap should now be >= w (since newly added L >= w)
+                if (cap == 0) {
+                    throw std::runtime_error("failed to create initial bin");
+                }
+            }
+            // pop a bin id from space_to_bins[cap]
+            auto &vec = space_to_bins[cap];
+            if (vec.empty()) {
+                // inconsistent state
+                seg.set_leaf(cap, 0);
+                // requery
+                cap = seg.find_best_fit(w);
+                if (cap == 0) {
+                    // create new bin as fallback
+                    chosen_bin = (int)rem.size();
+                    rem.push_back(L);
+                    bin_to_items.emplace_back();
+                    if (L>0) { space_to_bins[L].push_back(chosen_bin); seg.set_leaf(L, L); }
+                    cap = seg.find_best_fit(w);
+                }
+            }
+            if (chosen_bin == -1) {
+                // pop
+                auto &v2 = space_to_bins[cap];
+                chosen_bin = v2.back(); v2.pop_back();
+                if (v2.empty()) seg.set_leaf(cap, 0);
+            }
+            // assign item
+            rem[chosen_bin] -= w;
+            bin_to_items[chosen_bin].push_back(orig);
+            assignment[orig] = chosen_bin;
+            int new_r = rem[chosen_bin];
+            if (new_r > 0) {
+                space_to_bins[new_r].push_back(chosen_bin);
+                seg.set_leaf(new_r, new_r);
+            }
+        }
+    } else {
+        throw std::invalid_argument("mode must be 'bfd' or 'ffd'");
+    }
+
+    // Handle oversized items - each gets its own bin
+    for (const auto &it : oversized_items) {
+        int orig = it.second;
+        int bin_id = (int)rem.size();
+        rem.push_back(0); // oversized item uses full capacity, so remaining is 0
+        bin_to_items.emplace_back();
+        bin_to_items[bin_id].push_back(orig);
+        assignment[orig] = bin_id;
+    }
+
+    // Prepare return values
+    py::array_t<int> assign_out(N);
+    auto buf_out = assign_out.mutable_unchecked<1>();
+    for (ssize_t i = 0; i < N; ++i) buf_out(i) = assignment[i];
+
+    py::list py_bins;
+    for (auto &b : bin_to_items) {
+        py::list l;
+        for (int idx : b) l.append(idx);
+        py_bins.append(l);
+    }
+    py::list py_rem;
+    for (int r : rem) py_rem.append(r);
+
+    py::dict out;
+    out["assignments"] = assign_out;
+    out["bins"] = py_bins;
+    out["rem"] = py_rem;
+    return out;
+}
+
+// Pack documents and build new document index with padding
+// Inputs:
+// - document_index: 1D integer numpy array of document indices
+// - sequence_lengths: 1D integer numpy array of sequence lengths for each document
+// - seq_length: bin capacity (max sequence length)
+// - mode: "bfd" or "ffd"
+// - pad_marker: integer value to use for padding
+// Returns:
+// - new_document_index: 1D integer numpy array with packed documents and padding
+py::array_t<int> pack_documents(py::array_t<int, py::array::c_style | py::array::forcecast> document_index,
+                                py::array_t<int, py::array::c_style | py::array::forcecast> sequence_lengths,
+                                int seq_length,
+                                std::string mode = "ffd",
+                                int pad_marker = -1) {
+    auto doc_buf = document_index.unchecked<1>();
+    auto seq_buf = sequence_lengths.unchecked<1>();
+    ssize_t N = doc_buf.shape(0);
+
+    // Extract sequence lengths for the given document indices
+    std::vector<int> lengths(N);
+    for (ssize_t i = 0; i < N; ++i) {
+        int doc_idx = doc_buf(i);
+        if (doc_idx < 0 || doc_idx >= seq_buf.shape(0)) {
+            throw std::invalid_argument("Document index out of range");
+        }
+        lengths[i] = seq_buf(doc_idx);
+    }
+
+    // Create numpy array from lengths vector
+    py::array_t<int> lengths_array(N);
+    auto lengths_buf = lengths_array.mutable_unchecked<1>();
+    for (ssize_t i = 0; i < N; ++i) {
+        lengths_buf(i) = lengths[i];
+    }
+
+    // Pack the items
+    py::dict pack_result = pack_items(lengths_array, seq_length, mode);
+
+    // Extract results
+    auto assignments = pack_result["assignments"].cast<py::array_t<int>>();
+    auto bins = pack_result["bins"].cast<py::list>();
+    auto rem = pack_result["rem"].cast<py::list>();
+
+    // Build new document index
+    std::vector<int> new_document_index;
+
+    for (size_t bin_idx = 0; bin_idx < bins.size(); ++bin_idx) {
+        py::list bin_items = bins[bin_idx].cast<py::list>();
+        int remaining_size = rem[bin_idx].cast<int>();
+
+        // Add document indices for this bin
+        for (size_t item_idx = 0; item_idx < bin_items.size(); ++item_idx) {
+            int local_index = bin_items[item_idx].cast<int>();
+            int original_doc_index = doc_buf(local_index);
+            new_document_index.push_back(original_doc_index);
+        }
+
+        // Add padding if needed
+        if (remaining_size > 0) {
+            for (int i = 0; i < remaining_size; ++i) {
+                new_document_index.push_back(pad_marker);
+            }
+        } else if (remaining_size < 0) {
+            // This handles oversized items - pad to seq_length
+            int padding_needed = seq_length + remaining_size; // remaining_size is negative
+            for (int i = 0; i < padding_needed; ++i) {
+                new_document_index.push_back(pad_marker);
+            }
+        }
+    }
+
+    // Convert to numpy array
+    py::array_t<int> result(new_document_index.size());
+    auto result_buf = result.mutable_unchecked<1>();
+    for (size_t i = 0; i < new_document_index.size(); ++i) {
+        result_buf(i) = new_document_index[i];
+    }
+
+    return result;
+}
+
 PYBIND11_MODULE(helpers_cpp, m)
 {
   m.def("build_mapping", &build_mapping);
@@ -845,4 +1131,20 @@ PYBIND11_MODULE(helpers_cpp, m)
   m.def("build_sample_idx_int64", &build_sample_idx<int64_t>);
   m.def("build_blending_indices", &build_blending_indices);
   m.def("build_exhaustive_blending_indices", &build_exhaustive_blending_indices);
+  m.def("pack_items", &pack_items,
+        py::arg("lengths"), py::arg("L"), py::arg("mode") = "bfd",
+        "Pack items (lengths) into bins of capacity L. mode = 'bfd' or 'ffd'.\n\n"
+        "Returns dict with keys: 'assignments' (numpy array of bin ids), 'bins' (list of lists of item indices), 'rem' (remaining capacities)");
+  m.def("pack_documents", &pack_documents,
+        py::arg("document_index"), py::arg("sequence_lengths"), py::arg("seq_length"),
+        py::arg("mode") = "ffd", py::arg("pad_marker") = -1,
+        "Pack documents and build new document index with padding.\n\n"
+        "Args:\n"
+        "  document_index: 1D array of document indices\n"
+        "  sequence_lengths: 1D array of sequence lengths for each document\n"
+        "  seq_length: bin capacity (max sequence length)\n"
+        "  mode: 'bfd' or 'ffd' packing mode\n"
+        "  pad_marker: integer value to use for padding\n\n"
+        "Returns:\n"
+        "  new_document_index: 1D array with packed documents and padding");
 }

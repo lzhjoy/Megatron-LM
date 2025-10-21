@@ -15,12 +15,16 @@ import numpy
 import pytest
 import torch
 
-sys.path.append("/data/pretrain-linear-moe/YuLan-Pretrain")
+sys.path.append("/mnt/yulan_pretrain/pretrain-linear-moe/YuLan-Pretrain")
 
-from megatron.core.datasets.blended_megatron_dataset_builder import \
-    BlendedMegatronDatasetBuilder
-from megatron.core.datasets.gpt_dataset import (GPTDataset, GPTDatasetConfig,
-                                                MockGPTDataset)
+from megatron.core.datasets.blended_megatron_dataset_builder import (
+    BlendedMegatronDatasetBuilder,
+)
+from megatron.core.datasets.gpt_dataset import (
+    GPTDataset,
+    GPTDatasetConfig,
+    MockGPTDataset,
+)
 from megatron.core.datasets.utils import compile_helpers, get_blend_from_list
 from megatron.training.tokenizer.tokenizer import _NullTokenizer
 from tests.unit_tests.test_utilities import Utils
@@ -202,17 +206,19 @@ def test_gpt_dataset_with_loss_mask():
 
     print(_get_compressed({1: numpy.array([1, 10, 0, 10])}, 1, 14, 3))
 
+    # data_args_path
     data_path = []
-    for i in range(16):
+    for i in range(2):
         # d = f"/data/pretrain-linear-moe-dev/cache/datasets/IvanHU/aabcfab61cae2f6879866e11565c09b0a397c4690ee346b3135cd60c22f9d390/worker_{i}_input_ids_tmp"
-        d = f"/data/pretrain-linear-moe-dev/cache/datasets/IvanHU/069b39e9a8fe08f7/worker_{i}_input_ids_tmp"
+        # d = f"/mnt/yulan_pretrain/pretrain-linear-moe/YuLan-Pretrain/build/IvanHU/069b39e9a8fe08f7/worker_{i}_input_ids_tmp"
+        d = f"/mnt/yulan_pretrain/mount/data_final_train/预实验/stage_1/tmp/worker_{i}_input_ids_tmp"
         if os.path.getsize(d + ".bin") > 0:
-            data_path.append("1")
             data_path.append(d)
 
     tokenizer = _NullTokenizer(vocab_size=_MOCK_VOCAB_SIZE)
+    print(">>>>>", len(data_path))
     blend = get_blend_from_list(data_path)
-    print(blend)
+    print(">>>>>", blend)
 
     config = GPTDatasetConfig(
         random_seed=1234,
@@ -224,6 +230,7 @@ def test_gpt_dataset_with_loss_mask():
         eod_mask_loss=True,
         tokenizer=tokenizer,
         mid_level_dataset_surplus=0.005,
+        load_complemental_dataset=["loss_mask", "dropout_mask"],
     )
 
     dataset, val_dataset, test_dataset = BlendedMegatronDatasetBuilder(
@@ -233,7 +240,7 @@ def test_gpt_dataset_with_loss_mask():
 
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(
-        "/data/pretrain-linear-moe/preprocess/modify_tokenizer/YuLan-Mini-Qwen-Template"
+        "/mnt/yulan_pretrain/pretrain-linear-moe/preprocess/modify_tokenizer/YuLan-Mini-Qwen-Template"
     )
 
     def print_text(batch):
@@ -256,16 +263,17 @@ def test_gpt_dataset_with_loss_mask():
         loss_mask = batch["loss_mask"].numpy()
         attention_mask = batch["attention_mask"].numpy()
         position_ids = batch["position_ids"].numpy()
-        dropout_mask = batch["dropout_mask"]
+        # dropout_mask = batch["dropout_mask"]
         print("tokens", tokens, tokens.shape)
         print("labels", labels, labels.shape)
         print("loss_mask", loss_mask, loss_mask.shape)
         print("attention_mask", attention_mask, attention_mask.shape)
         print("position_ids", position_ids, position_ids.shape)
-        print("dropout_mask", dropout_mask)
+        # print("dropout_mask", dropout_mask)
 
     for idx, batch in enumerate(dataset):
         print(idx)
+        print(batch["dataset_id"], batch.keys())
         print_text(batch)
         print("===========================================")
         if idx > 20:

@@ -630,10 +630,8 @@ class IndexedDataset(torch.utils.data.Dataset):
         idx_path = get_idx_path(path_prefix)
         bin_path = get_bin_path(path_prefix)
         if object_storage_config is None:
-            assert os.path.exists(idx_path) and os.path.exists(
-                bin_path
-            ), "One or both of the .idx and .bin files cannot be found at the "
-            f"path prefix {path_prefix}"
+            assert os.path.exists(idx_path), f"{idx_path} not found"
+            assert os.path.exists(bin_path), f"{bin_path} not found"
         self.path_prefix = path_prefix
         self.multimodal = multimodal
         self.mmap = mmap
@@ -650,6 +648,7 @@ class IndexedDataset(torch.utils.data.Dataset):
         else:
             self.bin_reader = _FileBinReader(bin_path)
         self.index = _IndexReader(idx_path, self.multimodal)
+        assert len(self.index) > 0, f"Empty dataset {path_prefix}."
 
     def __getstate__(self) -> Tuple[str, bool, bool, Optional[ObjectStorageConfig]]:
         """Get the state during pickling
@@ -670,8 +669,10 @@ class IndexedDataset(torch.utils.data.Dataset):
 
     def __del__(self) -> None:
         """Clean up the object"""
-        del self.bin_reader
-        del self.index
+        if hasattr(self, "bin_reader"):
+            del self.bin_reader
+        if hasattr(self, "index"):
+            del self.index
 
     def __len__(self) -> int:
         """Return the length of the dataset i.e. the number of sequences in the index

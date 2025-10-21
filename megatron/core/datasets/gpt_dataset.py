@@ -4,15 +4,20 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 import numpy
 import torch
-from megatron.core.datasets.blended_megatron_dataset_config import \
-    BlendedMegatronDatasetConfig
+
+from megatron.core.datasets.blended_megatron_dataset_config import (
+    BlendedMegatronDatasetConfig,
+)
 from megatron.core.datasets.indexed_dataset import IndexedDataset
 from megatron.core.datasets.megatron_dataset import MegatronDataset
-from megatron.core.datasets.object_storage_utils import ObjectStorageConfig, is_object_storage_path
+from megatron.core.datasets.object_storage_utils import (
+    ObjectStorageConfig,
+    is_object_storage_path,
+)
 from megatron.core.datasets.utils import Split
 from megatron.core.tokenizers import MegatronTokenizerBase
 from megatron.core.utils import log_single_rank
@@ -52,6 +57,15 @@ class GPTDatasetConfig(BlendedMegatronDatasetConfig):
     object_storage_cache_path: Optional[str] = None
     """Path for caching indices for s3 or msc dataloading."""
 
+    load_complemental_dataset: Optional[List[str]] = None
+    """Key(s) of the complemental dataset(s) to be loaded."""
+
+    document_packing_algorithm: Literal['random', 'ffd', 'bfd'] = 'random'
+    """Algorithm to pack the documents. Currently supports random shuffle
+       and two fewer truncation algorithms (first-fit decreasing and best-fit
+       decreasing).
+    """
+
     def __post_init__(self) -> None:
         """Do asserts and set fields post init"""
         super().__post_init__()
@@ -84,7 +98,7 @@ class GPTDataset(MegatronDataset):
 
         dataset_path (Optional[str]): The real path on disk to the dataset, for bookkeeping
 
-        indexed_indices (numpy.ndarray): The set of the documents indices to expose
+        indexed_indices (numpy.ndarray): The set of the documents indices to expose (document indices for train, valid, test)
 
         num_samples (Optional[int]): The number of samples to draw from the indexed dataset. When
             None, build as many samples as correspond to one epoch.
@@ -133,7 +147,8 @@ class GPTDataset(MegatronDataset):
     def _load_complemental_dataset(
             dataset_path: Optional[str], name: str,
             config: GPTDatasetConfig) -> Optional[IndexedDataset]:
-        if dataset_path is None:
+        if dataset_path is None or config.load_complemental_dataset is None or \
+                name not in config.load_complemental_dataset:
             return None
 
         base_name = os.path.basename(dataset_path)
@@ -387,7 +402,7 @@ class GPTDataset(MegatronDataset):
         sample_parts_dropout_mask = []
 
         # Sample spans a single document
-        if doc_index_beg == doc_index_end:
+        if doc_index_beg == doc_index_end and self.document_index[doc_index_beg] != self.pad_document_marker:
             # Add the document id
             document_ids.append(self.document_index[doc_index_beg])
 
@@ -407,8 +422,11 @@ class GPTDataset(MegatronDataset):
                     self._get_compressed(self.dataset_dropout_mask, **args))
 
         # Sample spans multiple documents
-        else:
+        elif doc_index_beg < doc_index_end:
             for i in range(doc_index_beg, doc_index_end + 1):
+                if self.document_index[i] == self.pad_document_marker:
+                    continue
+
                 # Add the document id
                 document_ids.append(self.document_index[i])
 
@@ -445,25 +463,13 @@ class GPTDataset(MegatronDataset):
         length = sum(map(len, sample_parts))
 
         # Pad the sample if necessary
-        if length < (self.config.sequence_length +
-                     self.config.add_extra_token_to_sequence):
-            print(
-                "padding", self.config.sequence_length +
-                self.config.add_extra_token_to_sequence - length)
-            sample_parts.append(
-                [self._pad_token_id] *
-                (self.config.sequence_length +
-                 self.config.add_extra_token_to_sequence - length))
+        padding_length = self.config.sequence_length + self.config.add_extra_token_to_sequence - length
+        if padding_length > 0:
+            sample_parts.append([self._pad_token_id] * padding_length)
             if self.dataset_loss_mask is not None:
-                sample_parts_loss_mask.append([
-                    0, self.config.sequence_length +
-                    self.config.add_extra_token_to_sequence - length
-                ])
+                sample_parts_loss_mask.append([0, padding_length])
             if self.dataset_dropout_mask is not None:
-                sample_parts_dropout_mask.append([
-                    0, self.config.sequence_length +
-                    self.config.add_extra_token_to_sequence - length
-                ])
+                sample_parts_dropout_mask.append([0, padding_length])
 
         return (
             numpy.concatenate(sample_parts, dtype=numpy.int64),
@@ -573,10 +579,25 @@ class GPTDataset(MegatronDataset):
             numpy_random_state = numpy.random.RandomState(
                 self.config.random_seed)
 
+            if self.config.document_packing_algorithm in ['ffd', 'bfd']:
+                # A hack: add a new dummy document as padding document
+                self.pad_document_marker = len(self.dataset.sequence_lengths)
+            else:
+                self.pad_document_marker = None
+
             # Build the document index
-            document_index = _build_document_index(self.indices, num_epochs,
-                                                   numpy_random_state,
-                                                   separate_final_epoch)
+            # We do not need the modified dataset.sequence_lengths in _build_document_index
+            # because we have handled it in helpers_cpp.pack_documents
+            document_index = _build_document_index(
+                documents=self.indices,
+                num_epochs=num_epochs,
+                numpy_random_state=numpy_random_state,
+                separate_final_epoch=separate_final_epoch,
+                algorithm=self.config.document_packing_algorithm,
+                sequence_lengths=self.dataset.sequence_lengths,
+                seq_length=sequence_length,
+                pad_document_marker=self.pad_document_marker,
+            )
 
             # Build the sample index
             from megatron.core.datasets import helpers
@@ -588,7 +609,13 @@ class GPTDataset(MegatronDataset):
 
             assert document_index.dtype == numpy.int32
             assert self.dataset.sequence_lengths.dtype == numpy.int32
-            if len(document_index) * 2 > len(self.dataset.sequence_lengths):
+            if self.config.document_packing_algorithm in ['ffd', 'bfd']:
+                # The padding document is added to the end of the sequence_lengths.
+                # The added document will only be used for build_sample_idx and
+                #
+                sequence_lengths_for_cpp = self.dataset.sequence_lengths.copy()
+                sequence_lengths_for_cpp = numpy.append(sequence_lengths_for_cpp, [1])
+            elif len(document_index) * 2 > len(self.dataset.sequence_lengths):
                 # If "access density" of sequence_lengths is high, force load the mmap-ed array
                 # into memory by making a copy.
                 #
@@ -599,6 +626,7 @@ class GPTDataset(MegatronDataset):
                 sequence_lengths_for_cpp = self.dataset.sequence_lengths.copy()
             else:
                 sequence_lengths_for_cpp = self.dataset.sequence_lengths
+
             sample_index = helpers.build_sample_idx(
                 sequence_lengths_for_cpp,
                 document_index,
@@ -696,7 +724,7 @@ class GPTDataset(MegatronDataset):
         return document_index, sample_index, shuffle_index
 
     def _get_num_tokens_per_epoch(self) -> int:
-        """Calculate the number of tokens in a single epoch
+        """Calculate the number of tokens in a single epoch (excluding the padding document)
 
         Returns:
             int: The number of tokens in a single epoch
@@ -717,6 +745,11 @@ class GPTDataset(MegatronDataset):
         if self.num_samples is None:
             return num_epochs
         else:
+            assert getattr(self.config, "document_packing_algorithm", "random") == "random", (
+                "Only random packing algorithm is supported for sample-based training, "
+                "since we cannot determine the number of epochs in advance. "
+                "You can remove this assertion on your own risk."
+            )
             num_tokens_requested = (self.num_samples *
                                     self.config.sequence_length
                                     ) + self.config.add_extra_token_to_sequence
@@ -731,6 +764,10 @@ def _build_document_index(
     num_epochs: int,
     numpy_random_state: numpy.random.RandomState,
     separate_final_epoch: bool,
+    algorithm: Literal['random', 'ffd', 'bfd'] = 'random',
+    sequence_lengths: Optional[numpy.ndarray] = None,
+    seq_length: Optional[int] = None,
+    pad_document_marker: Optional[int] = None,
 ) -> numpy.ndarray:
     """Build an array with length = num epochs * num documents
 
@@ -743,6 +780,14 @@ def _build_document_index(
 
         separate_final_epoch (bool): Whether to exclude the last epoch from the global shuffle
 
+        algorithm (str): Packing algorithm
+
+        sequence_lengths (numpy.ndarray): Sequence lengths of all documents
+
+        seq_length (int): Sequence length in a single sample
+
+        pad_document_marker (int): Document idx for padding
+
     Returns:
         numpy.ndarray: The document index
     """
@@ -752,13 +797,28 @@ def _build_document_index(
         document_index[:] = documents
         document_index = document_index.reshape(-1)
         document_index = document_index.astype(numpy.int32)
-        numpy_random_state.shuffle(document_index)
+        if algorithm == 'random':
+            numpy_random_state.shuffle(document_index)
+        elif algorithm in ['ffd', 'bfd']:
+            from megatron.core.datasets import helpers_cpp
+
+            numpy_random_state.shuffle(document_index)
+            document_index = helpers_cpp.pack_documents(
+                document_index=document_index,
+                sequence_lengths=sequence_lengths,
+                seq_length=seq_length,
+                mode=algorithm,
+                pad_marker=pad_document_marker,
+            )
+        else:
+            raise ValueError(f"Invalid algorithm: {algorithm}")
+
         return document_index
 
     doc_idx_first = _build_document_index(documents, num_epochs - 1,
-                                          numpy_random_state, False)
+                                          numpy_random_state, False, algorithm, sequence_lengths, seq_length, pad_document_marker)
     doc_idx_last = _build_document_index(documents, 1, numpy_random_state,
-                                         False)
+                                         False, algorithm, sequence_lengths, seq_length, pad_document_marker)
     return numpy.concatenate((doc_idx_first, doc_idx_last))
 
 
