@@ -178,7 +178,7 @@ class MambaModel(LanguageModule):
         runtime_gather_output: Optional[bool] = None,
         *,
         inference_params: Optional[BaseInferenceContext] = None,
-        dropout_mask=None,
+        dropout_mask: Tensor = None,
     ) -> Tensor:
         """Forward function of the Mamba model. This function passes the input tensors
         through the embedding layer, and then the decoder and finally into the post

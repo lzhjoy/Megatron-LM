@@ -281,6 +281,7 @@ class GPTModel(LanguageModule):
         decoder_input: Tensor = None,
         inference_context: BaseInferenceContext = None,
         packed_seq_params: PackedSeqParams = None,
+        dropout_mask: Tensor = None,
     ):
         """Preprocesses inputs for the transformer decoder.
 
@@ -445,6 +446,7 @@ class GPTModel(LanguageModule):
             decoder_input=decoder_input,
             inference_context=inference_context,
             packed_seq_params=packed_seq_params,
+            dropout_mask=dropout_mask,
         )
 
         (decoder_input, rotary_pos_emb, rotary_pos_cos, rotary_pos_sin, sequence_len_offset) = (
