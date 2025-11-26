@@ -1,5 +1,4 @@
 # Copyright (c) 2023, NVIDIA CORPORATION.  All rights reserved.
-
 """Pretrain and SFT GPT."""
 
 from functools import partial
@@ -10,8 +9,7 @@ import torch
 from gpt_builders import gpt_builder
 from megatron.core import parallel_state
 from megatron.core.datasets.blended_megatron_dataset_builder import (
-    BlendedMegatronDatasetBuilder,
-)
+    BlendedMegatronDatasetBuilder, )
 from megatron.core.datasets.gpt_dataset import (
     GPTDataset,
     GPTDatasetConfig,
@@ -72,9 +70,9 @@ def get_batch(data_iterator, vp_stage=None):
 SPIKY_LOSS_FACTOR = 10
 
 
-def loss_func(
-    loss_mask: torch.Tensor, output_tensor: torch.Tensor, model: Optional[GPTModel] = None
-):
+def loss_func(loss_mask: torch.Tensor,
+              output_tensor: torch.Tensor,
+              model: Optional[GPTModel] = None):
     """Loss function.
 
     Args:
@@ -129,12 +127,16 @@ def loss_func(
         )
 
     num_tokens = loss_mask.sum().clone().detach().to(torch.int)
-    reporting_loss = torch.cat([loss.clone().detach().view(1), num_tokens.view(1)])
+    reporting_loss = torch.cat(
+        [loss.clone().detach().view(1),
+         num_tokens.view(1)])
 
     return (loss, num_tokens, {'lm loss': reporting_loss})
 
 
-def forward_step(data_iterator, model: GPTModel, return_schedule_plan: bool = False):
+def forward_step(data_iterator,
+                 model: GPTModel,
+                 return_schedule_plan: bool = False):
     """Forward training step.
 
     Args:
@@ -156,26 +158,37 @@ def forward_step(data_iterator, model: GPTModel, return_schedule_plan: bool = Fa
 
     with stimer:
         if args.use_legacy_models:
-            output_tensor = model(tokens, position_ids, attention_mask, labels=labels)
+            output_tensor = model(tokens,
+                                  position_ids,
+                                  attention_mask,
+                                  labels=labels)
         else:
             if return_schedule_plan:
                 assert args.overlap_moe_expert_parallel_comm, \
                     "overlap_moe_expert_parallel_comm must be enabled to return the schedule plan"
-                schedule_plan = model.build_schedule_plan(
-                    tokens, position_ids, attention_mask, labels=labels, loss_mask=loss_mask
-                )
-                return schedule_plan, partial(loss_func, loss_mask, model=model)
+                schedule_plan = model.build_schedule_plan(tokens,
+                                                          position_ids,
+                                                          attention_mask,
+                                                          labels=labels,
+                                                          loss_mask=loss_mask)
+                return schedule_plan, partial(loss_func,
+                                              loss_mask,
+                                              model=model)
             else:
-                output_tensor = model(
-                    tokens, position_ids, attention_mask, labels=labels, loss_mask=loss_mask , dropout_mask=dropout_mask
-                )
+                output_tensor = model(tokens,
+                                      position_ids,
+                                      attention_mask,
+                                      labels=labels,
+                                      loss_mask=loss_mask,
+                                      dropout_mask=dropout_mask)
 
     # [ModelOpt]: model is needed to access ModelOpt distillation losses
     return output_tensor, partial(loss_func, loss_mask, model=model)
 
 
 def is_dataset_built_on_rank(vp_stage=None):
-    return is_first_or_last_pipeline_stage(vp_stage) and parallel_state.get_tensor_model_parallel_rank() == 0
+    return is_first_or_last_pipeline_stage(
+        vp_stage) and parallel_state.get_tensor_model_parallel_rank() == 0
 
 
 def core_gpt_dataset_config_from_args(args):
@@ -186,7 +199,8 @@ def core_gpt_dataset_config_from_args(args):
 
     # Sometimes --data-path is too long, instead we parse it from a file.
     blend: Optional[Tuple[List[str], Optional[List[float]]]]
-    blend_per_split: Optional[List[Optional[Tuple[List[str], Optional[List[float]]]]]]
+    blend_per_split: Optional[List[Optional[Tuple[List[str],
+                                                  Optional[List[float]]]]]]
     blend, blend_per_split = get_blend_and_blend_per_split(args)
 
     return GPTDatasetConfig(
@@ -208,10 +222,12 @@ def core_gpt_dataset_config_from_args(args):
         object_storage_cache_path=args.object_storage_cache_path,
         mid_level_dataset_surplus=args.mid_level_dataset_surplus,
         load_complemental_dataset=args.load_complemental_dataset,
+        document_packing_algorithm=args.document_packing_algorithm,
     )
 
 
-def train_valid_test_datasets_provider(train_val_test_num_samples, vp_stage=None):
+def train_valid_test_datasets_provider(train_val_test_num_samples,
+                                       vp_stage=None):
     """Build the train test and validation datasets.
 
     Args:
@@ -232,8 +248,8 @@ def train_valid_test_datasets_provider(train_val_test_num_samples, vp_stage=None
     print_rank_0("> building train, validation, and test datasets for GPT ...")
 
     train_ds, valid_ds, test_ds = BlendedMegatronDatasetBuilder(
-        dataset_type, train_val_test_num_samples, partial(is_dataset_built_on_rank, vp_stage=vp_stage), config
-    ).build()
+        dataset_type, train_val_test_num_samples,
+        partial(is_dataset_built_on_rank, vp_stage=vp_stage), config).build()
 
     print_rank_0("> finished creating GPT datasets ...")
 
@@ -246,7 +262,8 @@ if __name__ == "__main__":
     train_valid_test_datasets_provider.is_distributed = True
 
     # Optionally enable inprocess restart on pretrain
-    pretrain, store = inprocess_restart.maybe_wrap_for_inprocess_restart(pretrain)
+    pretrain, store = inprocess_restart.maybe_wrap_for_inprocess_restart(
+        pretrain)
 
     pretrain(
         train_valid_test_datasets_provider,

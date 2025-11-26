@@ -913,6 +913,12 @@ def _get_ltor_masks_and_position_ids(
     if reset_position_ids:
         position_ids = position_ids.clone()
 
+    # DEBUG: Record state before reset
+    eod_count = (data == eod_token).sum().item()
+    loss_mask_before = loss_mask.sum().item() if eod_mask_loss else seq_length
+    position_ids_before = position_ids.clone() if reset_position_ids else None
+    attention_mask_before = attention_mask.clone() if reset_attention_mask and attention_mask is not None else None
+
     if reset_position_ids or reset_attention_mask:
         # Find indices where EOD token is.
         eod_index = position_ids[data == eod_token]
@@ -935,6 +941,36 @@ def _get_ltor_masks_and_position_ids(
     if attention_mask is not None:
         # Convert attention mask to binary:
         attention_mask = attention_mask < 0.5
+
+    # DEBUG: Print detailed information
+    import os
+    if os.environ.get('DEBUG_MASKS', '0') == '1':
+        print(f"\n[DEBUG] _get_ltor_masks_and_position_ids:")
+        print(f"  seq_length: {seq_length}")
+        print(f"  eod_token: {eod_token}, eod_count: {eod_count}")
+        print(f"  reset_position_ids: {reset_position_ids}")
+        print(f"  reset_attention_mask: {reset_attention_mask}")
+        print(f"  eod_mask_loss: {eod_mask_loss}")
+
+        if eod_mask_loss:
+            loss_mask_after = loss_mask.sum().item()
+            masked_tokens = (loss_mask == 0).sum().item()
+            print(f"  Loss mask - Before: {loss_mask_before:.0f}, After: {loss_mask_after:.0f}, "
+                  f"Masked tokens: {masked_tokens}")
+
+        if reset_position_ids and position_ids_before is not None:
+            pos_changed = (position_ids != position_ids_before).sum().item()
+            print(f"  Position IDs - Changed positions: {pos_changed}")
+            # Show first few position IDs before and after
+            print(f"    Before: {position_ids_before[:min(20, seq_length)].tolist()}")
+            print(f"    After:  {position_ids[:min(20, seq_length)].tolist()}")
+
+        if reset_attention_mask and attention_mask_before is not None:
+            # Count how many attention positions were zeroed
+            attn_zeros_before = (attention_mask_before == 0).sum().item()
+            attn_zeros_after = (attention_mask == 0).sum().item()
+            print(f"  Attention mask - Zeros before: {attn_zeros_before}, after: {attn_zeros_after}, "
+                  f"New zeros: {attn_zeros_after - attn_zeros_before}")
 
     return attention_mask, loss_mask, position_ids
 

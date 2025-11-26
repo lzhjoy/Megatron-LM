@@ -184,10 +184,10 @@ class _HuggingFaceTokenizer(MegatronLegacyTokenizer):
             else:
                 offsets.append(next_start_idx)
         return offsets
-
+    # TODO
     @property
     def eod(self):
-        return self._tokenizer.eos_token_id
+        return self._tokenizer.pad_token_id
 
     @property
     def bos(self):

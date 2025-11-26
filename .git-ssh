@@ -1,0 +1,2 @@
+#!/bin/sh
+exec ssh -i ~/.ssh/lzh "$@"  # ~/.ssh/lzh 是自己的私钥
