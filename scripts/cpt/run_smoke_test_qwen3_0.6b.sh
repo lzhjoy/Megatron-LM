@@ -6,7 +6,8 @@
 # ============================================================================
 
 set -e
-source /opt/aps/workdir/input/file/pretrain-linear-moe/lvzhihao/megatron-for-agent/.venv/bin/activate
+export CUDA_VISIBLE_DEVICES=8
+source /home/yulan_pretrain/gaoyanzipeng/pretrain-linear-moe/LLMBox/.venv/bin/activate
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
@@ -22,9 +23,9 @@ export CUDA_DEVICE_MAX_CONNECTIONS=1
 # 1. 环境配置
 # ============================================================================
 
-# 模型配置
-export HF_MODEL_CKPT="/opt/aps/workdir/input/file/pretrain-linear-moe/lvzhihao/Qwen/Qwen3-0.6B"
-export TOKENIZER_MODEL="/opt/aps/workdir/input/file/pretrain-linear-moe/lvzhihao/Qwen/Qwen3-0.6B"
+# 模型配置 - 使用 mcore 格式的模型
+export MCORE_MODEL_CKPT="/media/public/models/huggingface/Qwen/Qwen3-0.6B-mcore"
+export TOKENIZER_MODEL="/media/public/models/huggingface/Qwen/Qwen3-0.6B-mcore"
 
 # 工作目录
 export MLM_WORK_DIR="${MLM_WORK_DIR:-.}"
@@ -33,13 +34,13 @@ export MLM_MODEL_SAVE="${MLM_WORK_DIR}/checkpoints_smoke_test"
 # 并行配置 (2 GPUs + Context Parallel)
 export TP=${TP:-1}
 export PP=${PP:-1}
-export CP=${CP:-2}
+export CP=${CP:-1}
 export DP=${DP:-1}
 export ETP=${ETP:-${TP}}
 export EP=${EP:-1}
 
 # 数据配置 - 小规模发烟测试
-DATA_PATH="${DATA_PATH:-/opt/aps/workdir/input/data/agent-clean/yulan_input_ids_document}"
+DATA_PATH="${DATA_PATH:-/mnt/yulan_pretrain/mount/data_final_train_qwen3/agent-clean/stage_1/yulan_input_ids_document}"
 TRAIN_SAMPLES="${TRAIN_SAMPLES:-100}"
 LR_DECAY_SAMPLES="${LR_DECAY_SAMPLES:-100}"
 
@@ -51,15 +52,8 @@ MLM_DATA_ARGS=" \
     --train-samples ${TRAIN_SAMPLES} \
     --lr-decay-samples ${LR_DECAY_SAMPLES} \
     --lr-warmup-samples 0 \
-    --split 99,1,0 \
+    --train-data-path ${DATA_PATH} \
 "
-
-# 如果指定了数据路径，使用本地数据；否则使用 HF 数据集
-if [ -f "${DATA_PATH}.bin" ]; then
-    MLM_DATA_ARGS="${MLM_DATA_ARGS} --train-data-path ${DATA_PATH}"
-else
-    MLM_DATA_ARGS="${MLM_DATA_ARGS} --finetune-hf-dataset wikitext --finetune-hf-dataset-config-name wikitext-2-v1"
-fi
 
 # ============================================================================
 # 3. 训练参数 - 发烟测试配置
@@ -132,6 +126,7 @@ MODEL_ARGS=" \
     --rotary-percent 1.0 \
     --rotary-base 1000000 \
     --untie-embeddings-and-output-weights \
+    --swiglu \
 "
 
 # ============================================================================
@@ -154,7 +149,7 @@ echo "  - reset-attention-mask: 启用"
 echo "  - eod-mask-loss: 启用"
 echo "  - document-packing-algorithm: ffd"
 echo "  - seq-length: 32768"
-echo "  - context-parallel-size: 2"
+echo "  - context-parallel-size: 1"
 echo "=========================================="
 echo "提示: 设置 DEBUG_MASKS=1 环境变量可启用详细 debug 输出"
 echo "  例如: DEBUG_MASKS=1 bash scripts/cpt/run_smoke_test_qwen3_0.6b.sh"
@@ -168,9 +163,13 @@ ${LAUNCH_SCRIPT} ${PRETRAIN_SCRIPT} \
     --pipeline-model-parallel-size ${PP} \
     --context-parallel-size ${CP} \
     --tokenizer-model ${TOKENIZER_MODEL} \
-    --pretrained-checkpoint ${HF_MODEL_CKPT} \
+    --load ${MCORE_MODEL_CKPT} \
     --finetune \
     --save ${MLM_MODEL_SAVE} \
+    --ckpt-format torch_dist \
+    --dist-ckpt-strictness log_unexpected \
+    --no-load-optim \
+    --no-load-rng \
     ${MLM_DATA_ARGS} \
     ${MLM_OPTIM_ARGS} \
     ${MLM_TRAIN_ARGS} \

@@ -10,8 +10,7 @@ import numpy
 import torch
 
 from megatron.core.datasets.blended_megatron_dataset_config import (
-    BlendedMegatronDatasetConfig,
-)
+    BlendedMegatronDatasetConfig, )
 from megatron.core.datasets.indexed_dataset import IndexedDataset
 from megatron.core.datasets.megatron_dataset import MegatronDataset
 from megatron.core.datasets.object_storage_utils import (
@@ -23,7 +22,6 @@ from megatron.core.tokenizers import MegatronTokenizerBase
 from megatron.core.utils import log_single_rank
 
 logger = logging.getLogger(__name__)
-
 
 _PAD_TOKEN_ID = -1
 
@@ -402,7 +400,8 @@ class GPTDataset(MegatronDataset):
         sample_parts_dropout_mask = []
 
         # Sample spans a single document
-        if doc_index_beg == doc_index_end and self.document_index[doc_index_beg] != self.pad_document_marker:
+        if doc_index_beg == doc_index_end and self.document_index[
+                doc_index_beg] != self.pad_document_marker:
             # Add the document id
             document_ids.append(self.document_index[doc_index_beg])
 
@@ -524,10 +523,9 @@ class GPTDataset(MegatronDataset):
         else:
             cache_hit = False
 
-        if not path_to_cache or (
-            not cache_hit
-            and (not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0)
-        ):
+        if not path_to_cache or (not cache_hit and
+                                 (not torch.distributed.is_initialized()
+                                  or torch.distributed.get_rank() == 0)):
             log_single_rank(
                 logger,
                 logging.INFO,
@@ -614,7 +612,8 @@ class GPTDataset(MegatronDataset):
                 # The added document will only be used for build_sample_idx and
                 #
                 sequence_lengths_for_cpp = self.dataset.sequence_lengths.copy()
-                sequence_lengths_for_cpp = numpy.append(sequence_lengths_for_cpp, [1])
+                sequence_lengths_for_cpp = numpy.append(
+                    sequence_lengths_for_cpp, [1])
             elif len(document_index) * 2 > len(self.dataset.sequence_lengths):
                 # If "access density" of sequence_lengths is high, force load the mmap-ed array
                 # into memory by making a copy.
@@ -690,7 +689,9 @@ class GPTDataset(MegatronDataset):
             f"\tLoad the document index from {os.path.basename(path_to_document_index)}",
         )
         t_beg = time.time()
-        document_index = numpy.load(path_to_document_index, allow_pickle=True, mmap_mode="r")
+        document_index = numpy.load(path_to_document_index,
+                                    allow_pickle=True,
+                                    mmap_mode="r")
         t_end = time.time()
         log_single_rank(logger, logging.DEBUG,
                         f"\t> time elapsed: {t_end - t_beg:4f} seconds")
@@ -701,7 +702,9 @@ class GPTDataset(MegatronDataset):
             f"\tLoad the sample index from {os.path.basename(path_to_sample_index)}",
         )
         t_beg = time.time()
-        sample_index = numpy.load(path_to_sample_index, allow_pickle=True, mmap_mode="r")
+        sample_index = numpy.load(path_to_sample_index,
+                                  allow_pickle=True,
+                                  mmap_mode="r")
         t_end = time.time()
         log_single_rank(logger, logging.DEBUG,
                         f"\t> time elapsed: {t_end - t_beg:4f} seconds")
@@ -712,7 +715,9 @@ class GPTDataset(MegatronDataset):
             f"\tLoad the shuffle index from {os.path.basename(path_to_shuffle_index)}",
         )
         t_beg = time.time()
-        shuffle_index = numpy.load(path_to_shuffle_index, allow_pickle=True, mmap_mode="r")
+        shuffle_index = numpy.load(path_to_shuffle_index,
+                                   allow_pickle=True,
+                                   mmap_mode="r")
         t_end = time.time()
         log_single_rank(logger, logging.DEBUG,
                         f"\t> time elapsed: {t_end - t_beg:4f} seconds")
@@ -720,6 +725,12 @@ class GPTDataset(MegatronDataset):
         log_single_rank(
             logger, logging.INFO,
             f"> total number of samples: {sample_index.shape[0] - 1}")
+
+        # Initialize pad_document_marker for cached indices
+        if self.config.document_packing_algorithm in ['ffd', 'bfd']:
+            self.pad_document_marker = len(self.dataset.sequence_lengths)
+        else:
+            self.pad_document_marker = None
 
         return document_index, sample_index, shuffle_index
 
@@ -745,11 +756,7 @@ class GPTDataset(MegatronDataset):
         if self.num_samples is None:
             return num_epochs
         else:
-            assert getattr(self.config, "document_packing_algorithm", "random") == "random", (
-                "Only random packing algorithm is supported for sample-based training, "
-                "since we cannot determine the number of epochs in advance. "
-                "You can remove this assertion on your own risk."
-            )
+            # Support for ffd packing algorithm in sample-based training
             num_tokens_requested = (self.num_samples *
                                     self.config.sequence_length
                                     ) + self.config.add_extra_token_to_sequence
@@ -816,9 +823,12 @@ def _build_document_index(
         return document_index
 
     doc_idx_first = _build_document_index(documents, num_epochs - 1,
-                                          numpy_random_state, False, algorithm, sequence_lengths, seq_length, pad_document_marker)
+                                          numpy_random_state, False, algorithm,
+                                          sequence_lengths, seq_length,
+                                          pad_document_marker)
     doc_idx_last = _build_document_index(documents, 1, numpy_random_state,
-                                         False, algorithm, sequence_lengths, seq_length, pad_document_marker)
+                                         False, algorithm, sequence_lengths,
+                                         seq_length, pad_document_marker)
     return numpy.concatenate((doc_idx_first, doc_idx_last))
 
 
@@ -917,7 +927,8 @@ def _get_ltor_masks_and_position_ids(
     eod_count = (data == eod_token).sum().item()
     loss_mask_before = loss_mask.sum().item() if eod_mask_loss else seq_length
     position_ids_before = position_ids.clone() if reset_position_ids else None
-    attention_mask_before = attention_mask.clone() if reset_attention_mask and attention_mask is not None else None
+    attention_mask_before = attention_mask.clone(
+    ) if reset_attention_mask and attention_mask is not None else None
 
     if reset_position_ids or reset_attention_mask:
         # Find indices where EOD token is.
@@ -955,22 +966,26 @@ def _get_ltor_masks_and_position_ids(
         if eod_mask_loss:
             loss_mask_after = loss_mask.sum().item()
             masked_tokens = (loss_mask == 0).sum().item()
-            print(f"  Loss mask - Before: {loss_mask_before:.0f}, After: {loss_mask_after:.0f}, "
-                  f"Masked tokens: {masked_tokens}")
+            print(
+                f"  Loss mask - Before: {loss_mask_before:.0f}, After: {loss_mask_after:.0f}, "
+                f"Masked tokens: {masked_tokens}")
 
         if reset_position_ids and position_ids_before is not None:
             pos_changed = (position_ids != position_ids_before).sum().item()
             print(f"  Position IDs - Changed positions: {pos_changed}")
             # Show first few position IDs before and after
-            print(f"    Before: {position_ids_before[:min(20, seq_length)].tolist()}")
-            print(f"    After:  {position_ids[:min(20, seq_length)].tolist()}")
+            print(
+                f"    Before: {position_ids_before.tolist()}"
+            )
+            print(f"    After:  {position_ids.tolist()}")
 
         if reset_attention_mask and attention_mask_before is not None:
             # Count how many attention positions were zeroed
             attn_zeros_before = (attention_mask_before == 0).sum().item()
             attn_zeros_after = (attention_mask == 0).sum().item()
-            print(f"  Attention mask - Zeros before: {attn_zeros_before}, after: {attn_zeros_after}, "
-                  f"New zeros: {attn_zeros_after - attn_zeros_before}")
+            print(
+                f"  Attention mask - Zeros before: {attn_zeros_before}, after: {attn_zeros_after}, "
+                f"New zeros: {attn_zeros_after - attn_zeros_before}")
 
     return attention_mask, loss_mask, position_ids
 
